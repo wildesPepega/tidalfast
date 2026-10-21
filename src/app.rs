@@ -4,7 +4,7 @@ mod eq_view;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{self, Color32, RichText, TextureHandle};
 
@@ -2636,6 +2636,27 @@ impl App {
                         open.title = title.clone();
                         open.description = description.clone();
                     }
+                }
+                // TIDAL needs a few seconds to process a new cover: show the
+                // chosen image right away, until the real one replaces it
+                if let (Some(_), Some(tex)) = (&cover, self.cover_preview.take()) {
+                    let key = format!(
+                        "https://local-cover.invalid/{uuid}/{}",
+                        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+                    );
+                    self.textures.insert(key.clone(), tex);
+                    for pl in &mut self.playlists {
+                        if pl.uuid == uuid {
+                            pl.square_image = Some(key.clone());
+                            pl.image = Some(key.clone());
+                        }
+                    }
+                    if let Some(open) = &mut self.open_playlist {
+                        if open.uuid == uuid {
+                            open.cover = Some(key);
+                        }
+                    }
+                    self.toast("Saving… the new cover is processed by TIDAL".into());
                 }
                 self.cover_preview = None;
                 self.net.send(Cmd::EditPlaylist { uuid, title, description, cover });

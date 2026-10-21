@@ -450,9 +450,12 @@ impl TidalClient {
             return Err(anyhow!("Image upload failed ({})", put.status()));
         }
 
-        // 3. wait until TIDAL has processed it
+        // 3. link it as the playlist's cover. TIDAL often accepts this right
+        // away; if it isn't done processing yet, wait for it and try again.
+        let link = serde_json::json!({ "data": [{ "type": "artworks", "id": id }] });
+        let path = format!("/playlists/{uuid}/relationships/coverArt");
         let mut ready = false;
-        for _ in 0..25 {
+        for _ in 0..40 {
             let art = self.openapi(reqwest::Method::GET, &format!("/artworks/{id}"), None).await?;
             let status = art
                 .pointer("/data/attributes/sourceFile/status/technicalFileStatus")
@@ -463,23 +466,14 @@ impl TidalClient {
                     ready = true;
                     break;
                 }
-                "" | "UPLOAD_REQUESTED" | "PROCESSING" => {
-                    tokio::time::sleep(Duration::from_millis(800)).await
-                }
+                "" | "UPLOAD_REQUESTED" | "PROCESSING" => tokio::time::sleep(Duration::from_millis(250)).await,
                 other => return Err(anyhow!("TIDAL could not process the image ({other})")),
             }
         }
         if !ready {
             return Err(anyhow!("TIDAL took too long to process the image"));
         }
-
-        // 4. make it the playlist's cover
-        self.openapi(
-            reqwest::Method::PATCH,
-            &format!("/playlists/{uuid}/relationships/coverArt"),
-            Some(&serde_json::json!({ "data": [{ "type": "artworks", "id": id }] })),
-        )
-        .await?;
+        self.openapi(reqwest::Method::PATCH, &path, Some(&link)).await?;
         Ok(())
     }
 
@@ -1231,14 +1225,20 @@ mod live {
             let uuid = c.create_playlist("tidalfast api test (deleted right away)").await.unwrap();
             println!("created {uuid}");
             let result = async {
+                let t = std::time::Instant::now();
                 c.update_playlist(&uuid, "tidalfast api test (deleted right away)", "a test description").await?;
+                println!("update_playlist {:?}", t.elapsed());
                 let p = c.playlist(&uuid).await?;
                 println!("description now: {:?}", p.description);
                 let img = std::fs::read("assets/icon.png")?;
+                let t = std::time::Instant::now();
                 c.set_playlist_cover(&uuid, &img).await?;
+                println!("set_playlist_cover {:?}", t.elapsed());
                 let cc = c.country_code.clone();
                 let v1 = c.get_value(&format!("{API_URL}/playlists/{uuid}"), &[("countryCode", &cc)]).await?;
-                println!("V1: {}", serde_json::to_string(&v1)?);
+                let sq = v1.get("squareImage").and_then(Value::as_str).unwrap_or("").replace('-', "/");
+                let r = c.http.get(format!("https://resources.tidal.com/images/{sq}/320x320.jpg")).send().await?;
+                println!("CDN {} {:?}", r.status(), r.headers().get("content-length"));
                 let v2 = c.openapi(reqwest::Method::GET, &format!("/playlists/{uuid}?include=coverArt"), None).await?;
                 println!("V2: {}", serde_json::to_string(&v2)?);
                 anyhow::Ok(())

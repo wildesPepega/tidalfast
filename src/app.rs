@@ -547,7 +547,7 @@ impl App {
                     }
                     if self.pending_play.as_deref() == Some(uuid.as_str()) {
                         self.pending_play = None;
-                        self.play_tracks(tracks.clone(), 0, Some(uuid.clone()));
+                        self.play_collection_tracks(tracks.clone(), Some(uuid.clone()));
                     }
                     if let Some(open) = &mut self.open_playlist {
                         if open.uuid == uuid {
@@ -798,6 +798,13 @@ impl App {
         self.start_current();
     }
 
+    /// Start a whole playlist/album from its beginning, or, with shuffle on,
+    /// from a random track.
+    fn play_collection_tracks(&mut self, tracks: Vec<Track>, source: Option<String>) {
+        let start = if self.cfg.shuffle { random_below(tracks.len()) } else { 0 };
+        self.play_tracks(tracks, start, source);
+    }
+
     fn set_liked(&mut self, track_id: u64, liked: bool) {
         if liked {
             self.liked_ids.insert(track_id);
@@ -928,7 +935,7 @@ impl App {
     fn rebuild_shuffle(&mut self, start: usize) {
         let n = self.queue.len();
         let mut order: Vec<usize> = (0..n).collect();
-        let mut seed = Instant::now().elapsed().as_nanos() as u64 ^ (n as u64) << 32;
+        let mut seed = clock_seed() ^ (n as u64) << 32;
         seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         for i in (1..n).rev() {
             seed = seed
@@ -2525,7 +2532,7 @@ impl App {
         }
         if let Some(tracks) = crate::cache::read::<Vec<Track>>(&format!("tracks-{}", pl.uuid)) {
             if !tracks.is_empty() {
-                self.play_tracks(tracks, 0, Some(pl.uuid.clone()));
+                self.play_collection_tracks(tracks, Some(pl.uuid.clone()));
                 return;
             }
         }
@@ -2880,7 +2887,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if !open.tracks.is_empty() && action_button(ui, icons::PLAY, "Play all", true).clicked() {
-                        self.play_tracks(open.tracks.clone(), 0, Some(open.uuid.clone()));
+                        self.play_collection_tracks(open.tracks.clone(), Some(open.uuid.clone()));
                     }
                     if self.card_state(&open.uuid).own && action_button(ui, icons::PENCIL_SIMPLE, "Edit details", false).clicked() {
                         self.cover_preview = None;
@@ -3182,7 +3189,7 @@ impl App {
 
         self.request_all(want);
         if play_top {
-            self.play_tracks(page.top_tracks.clone(), 0, Some(format!("artist:{}", artist.id)));
+            self.play_collection_tracks(page.top_tracks.clone(), Some(format!("artist:{}", artist.id)));
         }
         if share {
             self.share_url(format!("https://tidal.com/artist/{}", artist.id), ShareTarget::All);
@@ -5076,6 +5083,20 @@ fn library_row(
     action
 }
 
+/// Something different on every call (the clock's sub-second part).
+fn clock_seed() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+}
+
+/// A pseudo-random number in `0..n` (`0` for `n <= 1`).
+fn random_below(n: usize) -> usize {
+    if n <= 1 {
+        return 0;
+    }
+    let mixed = clock_seed().wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    (mixed >> 33) as usize % n
+}
+
 fn ellipsize(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_string()
@@ -5205,5 +5226,24 @@ mod debug_shot {
             }
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_start_stays_in_range_and_varies() {
+        assert_eq!(random_below(0), 0);
+        assert_eq!(random_below(1), 0);
+        let picks: std::collections::HashSet<usize> = (0..200)
+            .map(|_| {
+                std::thread::sleep(std::time::Duration::from_micros(150));
+                random_below(10)
+            })
+            .collect();
+        assert!(picks.iter().all(|&i| i < 10));
+        assert!(picks.len() > 3, "{picks:?}");
     }
 }

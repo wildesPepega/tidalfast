@@ -83,6 +83,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 ## Credits
 
 - **[SONE](https://github.com/lullabyX/sone) by lullabyX**: tidalfast builds on the work of this TIDAL desktop application. The TIDAL login flow (device authorization and the client configuration) and the way streams are resolved so that music playback works are taken from SONE. Thank you!
+- **[linkhop](https://github.com/paul-wtf/linkhop) by [paul-wtf](https://github.com/paul-wtf)**: the link conversion service tidalfast uses to open and share links across TIDAL, Spotify and YouTube. Thank you!
 - [egui / eframe](https://github.com/emilk/egui), [rodio](https://github.com/RustAudio/rodio), [cpal](https://github.com/RustAudio/cpal), [discord-rich-presence](https://crates.io/crates/discord-rich-presence), [souvlaki](https://github.com/Sinono3/souvlaki), [ksni](https://github.com/iovxw/ksni), [tray-icon](https://github.com/tauri-apps/tray-icon), [Phosphor icons](https://phosphoricons.com/) and [reqwest](https://github.com/seanmonstar/reqwest).
 - The TIDAL name and logo belong to TIDAL.
 

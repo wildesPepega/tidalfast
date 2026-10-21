@@ -23,6 +23,7 @@ No Electron, no web view, just a small binary.</p>
 - **Discord Rich Presence:** shows what you listen to, with cover, progress and an "Listen on TIDAL" button. Updates are debounced, rate-limit friendly and survive Discord restarts.
 - **Media keys and desktop media controls:** play/pause/next/previous/seek from your keyboard and from the media widgets of your desktop (MPRIS on Linux: KDE, GNOME, Waybar's `mpris` module, `playerctl`; System Media Transport Controls on Windows). Shows title, artist and cover.
 - **Tray icon:** StatusNotifierItem on Linux (KDE, Waybar, XFCE, … and GNOME with the AppIndicator extension), notification-area icon on Windows. Left click shows/hides the window, the menu has play/pause, next, previous and quit. Optionally keeps running in the tray when you close the window. Media keys and tray are configured in *Settings → System*.
+- **Updates:** checks GitHub for new releases (at startup and every few hours) and can download, verify (SHA-256) and install them itself, for the Linux binary, the AppImage and Windows; *Settings → System → Updates* has a switch for the check and for automatic installation.
 - **Output device selection** (PipeWire/PulseAudio sinks on Linux, WASAPI devices on Windows).
 - **Single instance:** starting tidalfast again focuses the running window.
 - Keyboard shortcuts: `Space` play/pause, `Ctrl+→/←` next/previous, `→/←` seek ±10 s, `↑/↓` volume, `M` mute, `Ctrl+F` or `/` search.

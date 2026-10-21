@@ -11,6 +11,7 @@ use eframe::egui::{self, Color32, RichText, TextureHandle};
 use crate::audio::{Audio, AudioCmd, AudioEv, OutputDevice};
 use crate::config::{RepeatMode, Settings};
 use crate::system::{NowPlaying, SysEvent, System};
+use crate::update::{self, Release, UpdateEv, Updater};
 use crate::transition::TransitionMode;
 use crate::discord::{Discord, DiscordCmd};
 use crate::eq::EqShared;
@@ -136,6 +137,29 @@ enum Dialog {
     Create { text: String },
 }
 
+/// What the update check and installation are doing.
+#[derive(Default)]
+struct UpdateState {
+    /// A newer release, if one was found.
+    available: Option<Release>,
+    status: UpdateStatus,
+    /// Seconds since start of the last check (None = never).
+    last_check: Option<Instant>,
+    started: Option<Instant>,
+}
+
+#[derive(Default, Clone, PartialEq)]
+enum UpdateStatus {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Downloading(f32),
+    /// Installed; takes effect after a restart.
+    Installed,
+    Failed(String),
+}
+
 struct User {
     name: String,
     country: String,
@@ -221,6 +245,8 @@ pub struct App {
     unmuted_volume: f32,
     /// The upcoming track handed to the audio engine: (queue index, shuffle position, track id).
     preload: Option<(usize, Option<usize>, u64)>,
+    updater: Updater,
+    update: UpdateState,
     /// Cover image picked in the edit dialog: file dialog result and preview.
     cover_pick: Option<std::sync::mpsc::Receiver<std::path::PathBuf>>,
     cover_preview: Option<TextureHandle>,
@@ -367,6 +393,8 @@ impl App {
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
             lib_click: None,
+            updater: Updater::new(cc.egui_ctx.clone()),
+            update: UpdateState::default(),
             cover_pick: None,
             cover_preview: None,
             system: System::new(cc),
@@ -1374,6 +1402,74 @@ impl App {
         self.toast = Some((message, Instant::now()));
     }
 
+    /// Look for new versions and install them when asked (or when automatic).
+    fn handle_updates(&mut self) {
+        let started = *self.update.started.get_or_insert_with(Instant::now);
+        let due = match self.update.last_check {
+            None => started.elapsed() > Duration::from_secs(4),
+            Some(at) => at.elapsed() > Duration::from_secs(6 * 3600),
+        };
+        if self.cfg.check_updates && due && self.update.status != UpdateStatus::Checking && update::supported() {
+            self.update.last_check = Some(Instant::now());
+            self.update.status = UpdateStatus::Checking;
+            self.updater.check(false);
+        }
+        for ev in self.updater.poll() {
+            match ev {
+                UpdateEv::Checked { manual, result } => {
+                    self.update.last_check = Some(Instant::now());
+                    match result {
+                        Ok(Some(release)) => {
+                            let announce = self.update.available.as_ref().map(|r| r.version.clone()) != Some(release.version.clone());
+                            self.update.status = UpdateStatus::Idle;
+                            let auto = self.cfg.auto_update && release.asset.is_some() && update::cannot_self_update().is_none();
+                            if announce {
+                                let note = if auto {
+                                    format!("Downloading tidalfast {}…", release.version)
+                                } else {
+                                    format!("tidalfast {} is available – see Settings → System", release.version)
+                                };
+                                self.toast(note);
+                            }
+                            self.update.available = Some(release.clone());
+                            if auto {
+                                self.start_update_install();
+                            }
+                        }
+                        Ok(None) => {
+                            self.update.available = None;
+                            self.update.status = UpdateStatus::UpToDate;
+                            if manual {
+                                self.toast(format!("tidalfast {} is up to date", update::VERSION));
+                            }
+                        }
+                        Err(e) => {
+                            self.update.status = if manual { UpdateStatus::Failed(e) } else { UpdateStatus::Idle };
+                        }
+                    }
+                }
+                UpdateEv::Progress(p) => self.update.status = UpdateStatus::Downloading(p),
+                UpdateEv::Installed => {
+                    self.update.status = UpdateStatus::Installed;
+                    self.toast("Update installed – restart tidalfast to use it".into());
+                }
+                UpdateEv::InstallFailed(e) => {
+                    self.update.status = UpdateStatus::Failed(e.clone());
+                    self.toast(format!("Update failed: {e}"));
+                }
+            }
+        }
+    }
+
+    fn start_update_install(&mut self) {
+        if let Some(asset) = self.update.available.as_ref().and_then(|r| r.asset.clone()) {
+            if !matches!(self.update.status, UpdateStatus::Downloading(_) | UpdateStatus::Installed) {
+                self.update.status = UpdateStatus::Downloading(0.0);
+                self.updater.install(asset);
+            }
+        }
+    }
+
     /// Media keys, tray and close-to-tray.
     fn handle_system(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested())
@@ -1620,6 +1716,12 @@ impl App {
         let open = resp.hovered() || self.profile_menu_open;
         let color = if self.profile_menu_open { ACCENT } else { ui::TEXT };
         top_tile(&right, tile, open, icons::GEAR, 21.0, color, egui::FontFamily::Proportional);
+        if self.update.available.is_some() {
+            // a new version is waiting
+            let dot = tile.right_top() + egui::vec2(-8.0, 8.0);
+            right.painter().circle_filled(dot, 5.0, ui::PANEL_SOLID);
+            right.painter().circle_filled(dot, 3.5, ACCENT);
+        }
         if resp.on_hover_text("Settings").clicked() {
             self.profile_menu_open = !self.profile_menu_open;
         }
@@ -3639,6 +3741,9 @@ impl App {
                     RichText::new("Closing the window only hides tidalfast; the music keeps playing. “Quit” in the tray menu exits the app.")
                         .color(TEXT_DIM),
                 );
+
+                ui.add_space(22.0);
+                self.update_settings(ui);
             }
             SettingsTab::Account => {
                 ui.heading("Account");
@@ -3659,6 +3764,95 @@ impl App {
                         .color(TEXT_DIM),
                 );
             }
+        }
+    }
+
+    fn update_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Updates");
+        ui.add_space(8.0);
+        ui.label(RichText::new(format!("tidalfast {}", update::VERSION)).strong());
+        ui.add_space(6.0);
+
+        let mut check = self.cfg.check_updates;
+        if ui.checkbox(&mut check, "Check for updates at startup").changed() {
+            self.cfg.check_updates = check;
+            self.touch();
+        }
+        let blocked = update::cannot_self_update();
+        let mut auto = self.cfg.auto_update;
+        if ui
+            .add_enabled(blocked.is_none(), egui::Checkbox::new(&mut auto, "Install updates automatically"))
+            .changed()
+        {
+            self.cfg.auto_update = auto;
+            self.touch();
+        }
+        if let Some(reason) = &blocked {
+            let text = if update::supported() { reason.as_str() } else { "Updates from within the app are not available on this system." };
+            ui.label(RichText::new(text).size(12.0).color(TEXT_DIM));
+        }
+        ui.add_space(8.0);
+
+        let busy = matches!(self.update.status, UpdateStatus::Checking | UpdateStatus::Downloading(_));
+        let mut install = false;
+        let mut restart = false;
+        if let Some(release) = self.update.available.clone() {
+            ui::card().show(ui, |ui| {
+                ui.label(RichText::new(format!("Version {} is available", release.version)).strong().color(ACCENT));
+                if !release.notes.is_empty() {
+                    let notes: String = release.notes.lines().take(14).collect::<Vec<_>>().join("\n");
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().max_height(150.0).id_salt("update_notes").show(ui, |ui| {
+                        ui.add(egui::Label::new(RichText::new(notes).size(12.5).color(TEXT_DIM)).wrap());
+                    });
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| match &self.update.status {
+                    UpdateStatus::Installed => {
+                        restart = action_button(ui, icons::ARROW_CLOCKWISE, "Restart now", true).clicked();
+                    }
+                    UpdateStatus::Downloading(p) => {
+                        ui.add(egui::ProgressBar::new(*p).desired_width(220.0).show_percentage());
+                    }
+                    _ => {
+                        if release.asset.is_some() && blocked.is_none() {
+                            install = action_button(ui, icons::DOWNLOAD_SIMPLE, "Update now", true).clicked();
+                        }
+                        if !release.page.is_empty() && action_button(ui, icons::ARROW_SQUARE_OUT, "View release", false).clicked() {
+                            open_url(&release.page);
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
+        }
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!busy, egui::Button::new("Check now")).clicked() {
+                self.update.last_check = Some(Instant::now());
+                self.update.status = UpdateStatus::Checking;
+                self.updater.check(true);
+            }
+            match &self.update.status {
+                UpdateStatus::Checking => {
+                    ui.spinner();
+                    ui.label(RichText::new("Checking…").color(TEXT_DIM));
+                }
+                UpdateStatus::UpToDate => {
+                    ui.label(RichText::new("You are up to date.").color(TEXT_DIM));
+                }
+                UpdateStatus::Failed(e) => {
+                    ui.label(RichText::new(ellipsize(e, 70)).color(ui::DANGER));
+                }
+                _ => {}
+            }
+        });
+        if install {
+            self.start_update_install();
+        }
+        if restart {
+            update::start_new_instance();
+            self.quitting = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -3789,6 +3983,7 @@ impl eframe::App for App {
         self.handle_net_events(ctx);
         self.handle_audio_events();
         self.handle_system(ctx);
+        self.handle_updates();
         self.refresh_preload();
         while let Ok(text) = self.link_rx.try_recv() {
             self.open_external(&text);
@@ -4953,6 +5148,9 @@ mod debug_shot {
                     if let Some(pl) = self.playlists.iter().find(|p| p.uuid != super::LIKED_UUID).cloned() {
                         self.apply_pl_action(pl, super::PlAction::Edit);
                     }
+                }
+                if std::env::var("TIDALFAST_SHOT_TAB").as_deref() == Ok("system") {
+                    self.settings_tab = super::SettingsTab::System;
                 }
                 self.settings_open = self.shot.settings;
                 self.now_open = self.shot.now;

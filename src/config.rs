@@ -27,6 +27,10 @@ pub struct Settings {
     pub media_keys: bool,
     /// Tray icon.
     pub tray: bool,
+    /// Look for a new version at startup (and every few hours).
+    pub check_updates: bool,
+    /// Download and install new versions without asking.
+    pub auto_update: bool,
     /// Closing the window keeps tidalfast running in the tray.
     pub close_to_tray: bool,
     /// How one track leads into the next.
@@ -67,6 +71,8 @@ impl Default for Settings {
             discord: true,
             media_keys: true,
             tray: false,
+            check_updates: true,
+            auto_update: false,
             close_to_tray: false,
             transition: TransitionMode::Off,
             crossfade_secs: 6.0,

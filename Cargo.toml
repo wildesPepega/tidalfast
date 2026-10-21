@@ -39,6 +39,8 @@ cpal = "0.17"
 
 discord-rich-presence = "1.1"
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
+md5 = "0.8.1"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 
 [profile.release]
 opt-level = 3

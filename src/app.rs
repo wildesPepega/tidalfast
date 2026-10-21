@@ -95,7 +95,8 @@ enum PlAction {
     Open,
     Play,
     Share(ShareTarget),
-    Rename,
+    /// Title, description and cover.
+    Edit,
     Delete,
 }
 
@@ -120,7 +121,13 @@ struct CardState {
 }
 
 enum Dialog {
-    Rename { uuid: String, text: String },
+    Edit {
+        uuid: String,
+        title: String,
+        description: String,
+        /// Image chosen for the new cover.
+        cover: Option<std::path::PathBuf>,
+    },
     Delete { uuid: String, title: String },
     Create { text: String },
 }
@@ -141,6 +148,7 @@ struct OpenPlaylist {
     uuid: String,
     title: String,
     creator: String,
+    description: String,
     cover: Option<String>,
     tracks: Vec<Track>,
     loading: bool,
@@ -209,6 +217,9 @@ pub struct App {
     unmuted_volume: f32,
     /// The upcoming track handed to the audio engine: (queue index, shuffle position, track id).
     preload: Option<(usize, Option<usize>, u64)>,
+    /// Cover image picked in the edit dialog: file dialog result and preview.
+    cover_pick: Option<std::sync::mpsc::Receiver<std::path::PathBuf>>,
+    cover_preview: Option<TextureHandle>,
     /// Last click on a playlist in the collapsed sidebar.
     lib_click: Option<(String, Instant)>,
     /// Media keys / tray integration.
@@ -352,6 +363,8 @@ impl App {
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
             lib_click: None,
+            cover_pick: None,
+            cover_preview: None,
             system: System::new(cc),
             window_hidden: false,
             quitting: false,
@@ -484,6 +497,14 @@ impl App {
                     self.net.send(Cmd::LoadFavorites);
                 }
                 Ev::Playlists(playlists) => {
+                    // an edit changes what the open playlist shows
+                    if let Some(open) = &mut self.open_playlist {
+                        if let Some(pl) = playlists.iter().find(|p| p.uuid == open.uuid) {
+                            open.title = pl.title.clone();
+                            open.description = pl.description.clone().unwrap_or_default();
+                            open.cover = pl.cover_url();
+                        }
+                    }
                     self.playlists = playlists;
                     self.playlists_loading = false;
                 }
@@ -2421,8 +2442,14 @@ impl App {
                 }
             }
             PlAction::Play => self.play_collection(&pl),
-            PlAction::Rename => {
-                self.dialog = Some(Dialog::Rename { uuid: pl.uuid, text: pl.title });
+            PlAction::Edit => {
+                self.cover_preview = None;
+                self.dialog = Some(Dialog::Edit {
+                    uuid: pl.uuid,
+                    title: pl.title,
+                    description: pl.description.unwrap_or_default(),
+                    cover: None,
+                });
             }
             PlAction::Delete => {
                 self.dialog = Some(Dialog::Delete { uuid: pl.uuid, title: pl.title });
@@ -2431,6 +2458,21 @@ impl App {
     }
 
     fn dialog_ui(&mut self, ctx: &egui::Context) {
+        // an image picked in the file dialog
+        if let Some(path) = self.cover_pick.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.cover_pick = None;
+            if let Some(Dialog::Edit { cover, .. }) = &mut self.dialog {
+                self.cover_preview = std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                    .map(|img| {
+                        let img = img.thumbnail(256, 256).to_rgba8();
+                        let size = [img.width() as usize, img.height() as usize];
+                        ctx.load_texture("cover_preview", egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()), Default::default())
+                    });
+                *cover = Some(path);
+            }
+        }
         let Some(dialog) = self.dialog.take() else { return };
         let frame = ui::card().fill(ui::PANEL_SOLID).inner_margin(egui::Margin::same(20));
         let mut keep: Option<Dialog> = None;
@@ -2440,29 +2482,84 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(360.0);
                 match dialog {
-                    Dialog::Rename { uuid, mut text } => {
-                        ui.heading("Rename playlist");
+                    Dialog::Edit { uuid, mut title, mut description, cover } => {
+                        ui.heading("Edit playlist");
                         ui.add_space(8.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut text)
+                        ui.horizontal(|ui| {
+                            // cover: the chosen image, or a hint
+                            let (rect, resp) = ui.allocate_exact_size(egui::vec2(96.0, 96.0), egui::Sense::click());
+                            pointer_on_hover(&resp);
+                            match &self.cover_preview {
+                                Some(tex) if cover.is_some() => {
+                                    egui::Image::new(egui::load::SizedTexture::new(tex.id(), rect.size()))
+                                        .corner_radius(10.0)
+                                        .paint_at(ui, rect);
+                                }
+                                _ => {
+                                    ui.painter().rect_filled(rect, 10.0, CARD_HOVER);
+                                    ui::paint_icon(ui.painter(), rect.center(), icons::IMAGE, 30.0, TEXT_DIM, egui::FontFamily::Proportional);
+                                }
+                            }
+                            if resp.hovered() {
+                                ui.painter().rect_filled(rect, 10.0, Color32::from_black_alpha(90));
+                                ui::paint_icon(ui.painter(), rect.center(), icons::PENCIL_SIMPLE, 24.0, Color32::WHITE, egui::FontFamily::Proportional);
+                            }
+                            let pick = resp.on_hover_text("Choose a cover image").clicked();
+                            ui.vertical(|ui| {
+                                ui.add_space(4.0);
+                                ui.label(RichText::new("Cover").size(12.0).color(TEXT_DIM));
+                                let name = cover
+                                    .as_ref()
+                                    .and_then(|p| p.file_name())
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "unchanged".to_string());
+                                ui.label(RichText::new(ellipsize(&name, 28)).size(13.0));
+                                if ui.button("Choose image…").clicked() || pick {
+                                    if self.cover_pick.is_none() {
+                                        let (tx, rx) = std::sync::mpsc::channel();
+                                        self.cover_pick = Some(rx);
+                                        let ctx = ui.ctx().clone();
+                                        std::thread::spawn(move || {
+                                            let picked = rfd::FileDialog::new()
+                                                .add_filter("Images (PNG, JPEG)", &["png", "jpg", "jpeg"])
+                                                .set_title("Choose a playlist cover")
+                                                .pick_file();
+                                            if let Some(path) = picked {
+                                                let _ = tx.send(path);
+                                            }
+                                            ctx.request_repaint();
+                                        });
+                                    }
+                                }
+                            });
+                        });
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Title").size(12.0).color(TEXT_DIM));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut title)
                                 .margin(egui::vec2(10.0, 8.0))
                                 .desired_width(f32::INFINITY),
                         );
-                        if !resp.has_focus() && !resp.lost_focus() {
-                            resp.request_focus();
-                        }
-                        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Description").size(12.0).color(TEXT_DIM));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut description)
+                                .hint_text("What is this playlist about?")
+                                .margin(egui::vec2(10.0, 8.0))
+                                .desired_rows(4)
+                                .desired_width(f32::INFINITY),
+                        );
                         ui.add_space(10.0);
-                        let ok = !text.trim().is_empty();
+                        let ok = !title.trim().is_empty();
                         let (mut done, mut cancel) = (false, false);
                         ui.horizontal(|ui| {
-                            done = ui.add_enabled(ok, egui::Button::new("Rename")).clicked();
+                            done = ui.add_enabled(ok, egui::Button::new("Save")).clicked();
                             cancel = ui.button("Cancel").clicked();
                         });
-                        if (done || enter) && ok {
-                            confirm = Some(Dialog::Rename { uuid, text });
+                        if done && ok {
+                            confirm = Some(Dialog::Edit { uuid, title, description, cover });
                         } else if !cancel {
-                            keep = Some(Dialog::Rename { uuid, text });
+                            keep = Some(Dialog::Edit { uuid, title, description, cover });
                         }
                     }
                     Dialog::Create { mut text } => {
@@ -2516,19 +2613,23 @@ impl App {
         }
         self.dialog = keep;
         match confirm {
-            Some(Dialog::Rename { uuid, text }) => {
-                let title = text.trim().to_string();
+            Some(Dialog::Edit { uuid, title, description, cover }) => {
+                let title = title.trim().to_string();
+                let description = description.trim().to_string();
                 for pl in &mut self.playlists {
                     if pl.uuid == uuid {
                         pl.title = title.clone();
+                        pl.description = Some(description.clone());
                     }
                 }
                 if let Some(open) = &mut self.open_playlist {
                     if open.uuid == uuid {
                         open.title = title.clone();
+                        open.description = description.clone();
                     }
                 }
-                self.net.send(Cmd::RenamePlaylist { uuid, title });
+                self.cover_preview = None;
+                self.net.send(Cmd::EditPlaylist { uuid, title, description, cover });
             }
             Some(Dialog::Delete { uuid, .. }) => {
                 self.playlists.retain(|p| p.uuid != uuid);
@@ -2575,6 +2676,7 @@ impl App {
             uuid: pl.uuid.clone(),
             title: pl.title.clone(),
             creator,
+            description: pl.description.clone().unwrap_or_default(),
             cover: pl.cover_url(),
             tracks: cached.clone().unwrap_or_default(),
             loading: cached.is_none(),
@@ -2607,6 +2709,11 @@ impl App {
                 if !open.creator.is_empty() {
                     ui.label(RichText::new(&open.creator).weak());
                 }
+                if !open.description.is_empty() {
+                    ui.add_space(4.0);
+                    ui.set_max_width(ui.available_width().min(620.0));
+                    ui.add(egui::Label::new(RichText::new(&open.description).color(TEXT_DIM).size(13.0)).wrap());
+                }
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(format!("{} tracks", open.tracks.len()))
@@ -2614,11 +2721,20 @@ impl App {
                         .size(12.0),
                 );
                 ui.add_space(8.0);
-                if !open.tracks.is_empty()
-                    && action_button(ui, icons::PLAY, "Play all", true).clicked()
-                {
-                    self.play_tracks(open.tracks.clone(), 0, Some(open.uuid.clone()));
-                }
+                ui.horizontal(|ui| {
+                    if !open.tracks.is_empty() && action_button(ui, icons::PLAY, "Play all", true).clicked() {
+                        self.play_tracks(open.tracks.clone(), 0, Some(open.uuid.clone()));
+                    }
+                    if self.card_state(&open.uuid).own && action_button(ui, icons::PENCIL_SIMPLE, "Edit details", false).clicked() {
+                        self.cover_preview = None;
+                        self.dialog = Some(Dialog::Edit {
+                            uuid: open.uuid.clone(),
+                            title: open.title.clone(),
+                            description: open.description.clone(),
+                            cover: None,
+                        });
+                    }
+                });
             });
         });
         ui.add_space(8.0);
@@ -4508,8 +4624,8 @@ fn playlist_menu(ui: &mut egui::Ui, st: &CardState, action: &mut Option<PlAction
     }
     if st.own {
         ui.separator();
-        if ui.button(format!("{}  Rename", icons::PENCIL_SIMPLE)).clicked() {
-            *action = Some(PlAction::Rename);
+        if ui.button(format!("{}  Edit details", icons::PENCIL_SIMPLE)).clicked() {
+            *action = Some(PlAction::Edit);
             ui.close_menu();
         }
         if ui
@@ -4775,6 +4891,11 @@ mod debug_shot {
                     self.search_query = q;
                     self.perform_search(false);
                     ctx.memory_mut(|m| m.request_focus(egui::Id::new("search_field")));
+                }
+                if std::env::var_os("TIDALFAST_SHOT_EDIT").is_some() {
+                    if let Some(pl) = self.playlists.iter().find(|p| p.uuid != super::LIKED_UUID).cloned() {
+                        self.apply_pl_action(pl, super::PlAction::Edit);
+                    }
                 }
                 self.settings_open = self.shot.settings;
                 self.now_open = self.shot.now;

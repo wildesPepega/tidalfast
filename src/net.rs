@@ -29,9 +29,12 @@ pub enum Cmd {
         title: String,
         track_id: u64,
     },
-    RenamePlaylist {
+    /// Change title, description and (optionally) the cover image of an own playlist.
+    EditPlaylist {
         uuid: String,
         title: String,
+        description: String,
+        cover: Option<std::path::PathBuf>,
     },
     DeletePlaylist {
         uuid: String,
@@ -252,9 +255,19 @@ async fn worker(
                     Err(e) => send_error(&ev, e),
                 }
             }
-            Cmd::RenamePlaylist { uuid, title } => {
-                let result = client.rename_playlist(&uuid, &title).await;
-                finish_playlist_edit(&mut client, &ev, result, "Playlist renamed").await;
+            Cmd::EditPlaylist { uuid, title, description, cover } => {
+                let result = async {
+                    client.update_playlist(&uuid, &title, &description).await?;
+                    if let Some(path) = cover {
+                        let bytes = tokio::fs::read(&path)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Could not read the image ({e})"))?;
+                        client.set_playlist_cover(&uuid, &bytes).await?;
+                    }
+                    Ok(())
+                }
+                .await;
+                finish_playlist_edit(&mut client, &ev, result, "Playlist updated").await;
             }
             Cmd::DeletePlaylist { uuid } => {
                 let result = client.delete_playlist(&uuid).await;

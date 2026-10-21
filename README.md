@@ -11,6 +11,7 @@ No Electron, no web view, just a small binary.</p>
 
 - **Best quality, always.** tidalfast requests the highest quality TIDAL offers for every track (Hi-Res Lossless → Lossless FLAC → High AAC). Hi-Res streams use DASH, which the player cannot decode yet, so in practice you get lossless FLAC. There is nothing to configure.
 - **Library:** your playlists, liked tracks, albums and artist pages (top tracks and releases), plus search across tracks, albums, artists and playlists.
+- **Playlist details:** edit the title, description and cover image of your own playlists (right-click a playlist or use *Edit details*); descriptions are shown on the playlist page.
 - **Queue, shuffle and repeat**, with the last played track restored on startup.
 - **Gapless playback or crossfade** between tracks (length adjustable).
 - **10-band equalizer** with a live spectrum/meter display.

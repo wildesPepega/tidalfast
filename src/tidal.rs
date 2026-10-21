@@ -10,6 +10,7 @@ use crate::model::{Album, Artist, CreditGroup, Lyrics, Playlist, PlaylistCreator
 
 const AUTH_URL: &str = "https://auth.tidal.com/v1/oauth2";
 const API_URL: &str = "https://api.tidal.com/v1";
+const OPENAPI_URL: &str = "https://openapi.tidal.com/v2";
 const API_V2_URL: &str = "https://api.tidal.com/v2";
 const CLIENT_VERSION: &str = "2026.9.15";
 
@@ -18,6 +19,22 @@ const PLAYBACKINFO_SUB_STATUS_RANGE: std::ops::RangeInclusive<u64> = 4000..=4999
 /// Device-code client credentials (decoded from SONE's embedded config).
 pub const CLIENT_ID: &str = "fX2JxdmntZWK0ixT";
 pub const CLIENT_SECRET: &str = "1Nn9AfDAjxrgJFJbKNWLeAyKGVGmINuXPPLHVXAvxAg=";
+
+/// Centre-crop to a square, at most 1280 px, as JPEG.
+fn square_jpeg(bytes: &[u8]) -> Result<Vec<u8>> {
+    let img = image::load_from_memory(bytes).context("This file is not a readable image")?;
+    let side = img.width().min(img.height());
+    let mut square = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side);
+    if side > 1280 {
+        square = square.resize(1280, 1280, image::imageops::FilterType::Lanczos3);
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    square
+        .to_rgb8()
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90))
+        .context("encoding the cover")?;
+    Ok(out.into_inner())
+}
 
 fn sub_status(body: &str) -> Option<u64> {
     serde_json::from_str::<Value>(body)
@@ -344,14 +361,123 @@ impl TidalClient {
         }
     }
 
-    pub async fn rename_playlist(&mut self, uuid: &str, title: &str) -> Result<()> {
+    /// Change a playlist's title and description.
+    pub async fn update_playlist(&mut self, uuid: &str, title: &str, description: &str) -> Result<()> {
         let cc = self.country_code.clone();
         let etag = self.playlist_etag(uuid).await?;
         self.write(
             reqwest::Method::POST,
             &format!("{API_URL}/playlists/{uuid}?countryCode={cc}"),
-            &[("title", title)],
+            &[("title", title), ("description", description)],
             Some(&etag),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// One JSON:API request to TIDAL's OpenAPI (artworks and relationships).
+    async fn openapi(&mut self, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
+        let mut refreshed = false;
+        loop {
+            let mut req = self
+                .http
+                .request(method.clone(), format!("{OPENAPI_URL}{path}"))
+                .header("Authorization", format!("Bearer {}", self.access_token))
+                .header("x-tidal-client-version", CLIENT_VERSION)
+                .query(&[("countryCode", self.country_code.as_str())]);
+            if let Some(body) = body {
+                req = req.header("Content-Type", "application/vnd.api+json").json(body);
+            }
+            let resp = req.send().await?;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed && self.has_refresh_token() {
+                refreshed = true;
+                self.refresh().await?;
+                continue;
+            }
+            if !status.is_success() {
+                return Err(anyhow!("HTTP {status} for {path}: {}", truncate(&text, 300)));
+            }
+            // 204 answers have no body
+            return Ok(serde_json::from_str(&text).unwrap_or(Value::Null));
+        }
+    }
+
+    /// Upload `image` (any format the decoder knows) as the playlist's cover.
+    pub async fn set_playlist_cover(&mut self, uuid: &str, image: &[u8]) -> Result<()> {
+        use base64::Engine;
+        let jpeg = square_jpeg(image)?;
+        let digest = md5::compute(&jpeg);
+        let hex = format!("{digest:x}");
+        let content_md5 = base64::engine::general_purpose::STANDARD.encode(digest.0);
+
+        // 1. announce the artwork and get an upload link
+        let created = self
+            .openapi(
+                reqwest::Method::POST,
+                "/artworks",
+                Some(&serde_json::json!({
+                    "data": { "type": "artworks", "attributes": {
+                        "mediaType": "IMAGE",
+                        "sourceFile": { "md5Hash": hex, "size": jpeg.len() }
+                    } }
+                })),
+            )
+            .await?;
+        let id = created
+            .pointer("/data/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("TIDAL returned no artwork ID"))?
+            .to_string();
+        let href = created
+            .pointer("/data/attributes/sourceFile/uploadLink/href")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("TIDAL returned no upload link"))?
+            .to_string();
+
+        // 2. upload the bytes (no authorization here)
+        let put = self
+            .http
+            .put(&href)
+            .header("content-md5", content_md5)
+            .header("Content-Type", "image/jpeg")
+            .timeout(Duration::from_secs(120))
+            .body(jpeg)
+            .send()
+            .await?;
+        if !put.status().is_success() {
+            return Err(anyhow!("Image upload failed ({})", put.status()));
+        }
+
+        // 3. wait until TIDAL has processed it
+        let mut ready = false;
+        for _ in 0..25 {
+            let art = self.openapi(reqwest::Method::GET, &format!("/artworks/{id}"), None).await?;
+            let status = art
+                .pointer("/data/attributes/sourceFile/status/technicalFileStatus")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            match status {
+                "OK" => {
+                    ready = true;
+                    break;
+                }
+                "" | "UPLOAD_REQUESTED" | "PROCESSING" => {
+                    tokio::time::sleep(Duration::from_millis(800)).await
+                }
+                other => return Err(anyhow!("TIDAL could not process the image ({other})")),
+            }
+        }
+        if !ready {
+            return Err(anyhow!("TIDAL took too long to process the image"));
+        }
+
+        // 4. make it the playlist's cover
+        self.openapi(
+            reqwest::Method::PATCH,
+            &format!("/playlists/{uuid}/relationships/coverArt"),
+            Some(&serde_json::json!({ "data": [{ "type": "artworks", "id": id }] })),
         )
         .await?;
         Ok(())
@@ -1078,6 +1204,49 @@ mod live_tests {
             println!("artist {}", ar.len());
             let s = c.search("eminem").await.unwrap();
             println!("search a={} ar={} pl={} t={} first album cover {:?} artists {}", s.albums.len(), s.artists.len(), s.playlists.len(), s.tracks.len(), s.albums.first().map(|a| (a.cover_url(160), a.artist_names())), s.artists.first().map(|a| a.picture_url(160).is_some()).unwrap_or(false));
+        });
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// Creates a throw-away playlist, sets description and cover, reads it back
+    /// and deletes it: `cargo test live_playlist_edit -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_playlist_edit() {
+        let cfg = crate::config::Settings::load();
+        let tokens = Tokens {
+            access_token: cfg.access_token.clone(),
+            refresh_token: cfg.refresh_token.clone(),
+            user_id: cfg.user_id,
+            ..Default::default()
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let mut c = TidalClient::new(cfg.country_code.clone()).unwrap();
+            c.set_tokens(&tokens);
+            let uuid = c.create_playlist("tidalfast api test (deleted right away)").await.unwrap();
+            println!("created {uuid}");
+            let result = async {
+                c.update_playlist(&uuid, "tidalfast api test (deleted right away)", "a test description").await?;
+                let p = c.playlist(&uuid).await?;
+                println!("description now: {:?}", p.description);
+                let img = std::fs::read("assets/icon.png")?;
+                c.set_playlist_cover(&uuid, &img).await?;
+                let cc = c.country_code.clone();
+                let v1 = c.get_value(&format!("{API_URL}/playlists/{uuid}"), &[("countryCode", &cc)]).await?;
+                println!("V1: {}", serde_json::to_string(&v1)?);
+                let v2 = c.openapi(reqwest::Method::GET, &format!("/playlists/{uuid}?include=coverArt"), None).await?;
+                println!("V2: {}", serde_json::to_string(&v2)?);
+                anyhow::Ok(())
+            }
+            .await;
+            c.delete_playlist(&uuid).await.unwrap();
+            println!("deleted {uuid}");
+            result.unwrap();
         });
     }
 }

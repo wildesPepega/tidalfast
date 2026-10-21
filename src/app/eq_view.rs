@@ -63,7 +63,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.heading("Equalizer");
             ui.add_space(6.0);
-            ui.label(RichText::new("Parametrisch · 10 Bänder · Limiter").color(TEXT_DIM));
+            ui.label(RichText::new("Parametric · 10 bands · Limiter").color(TEXT_DIM));
         });
         ui.add_space(10.0);
 
@@ -77,7 +77,7 @@ impl App {
         ui.add_space(6.0);
         ui.label(
             RichText::new(
-                "Knoten ziehen: Frequenz & Gain · Mausrad: Güte · Doppelklick: Gain zurücksetzen · Rechtsklick: Band an/aus",
+                "Drag nodes: frequency & gain · Mouse wheel: Q · Double-click: reset gain · Right-click: band on/off",
             )
             .size(12.0)
             .color(TEXT_DIM),
@@ -99,7 +99,7 @@ impl App {
         card().show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let on = self.cfg.eq.enabled;
-                if pill(ui, if on { "EQ AN" } else { "EQ AUS" }, on, 78.0).clicked() {
+                if pill(ui, if on { "EQ AN" } else { "EQ OFF" }, on, 78.0).clicked() {
                     self.cfg.eq.enabled = !on;
                     edit.changed = true;
                     edit.keep_preset = true;
@@ -110,7 +110,7 @@ impl App {
                 let selected = self
                     .eq_preset
                     .clone()
-                    .unwrap_or_else(|| "Benutzerdefiniert".to_string());
+                    .unwrap_or_else(|| "Custom".to_string());
                 let mut pick_builtin: Option<usize> = None;
                 let mut pick_user: Option<usize> = None;
                 egui::ComboBox::from_id_salt("eq_preset")
@@ -126,7 +126,7 @@ impl App {
                         }
                         if !self.cfg.eq.user_presets.is_empty() {
                             ui.separator();
-                            ui.label(RichText::new("Eigene").size(12.0).color(TEXT_DIM));
+                            ui.label(RichText::new("Custom").size(12.0).color(TEXT_DIM));
                             for (i, preset) in self.cfg.eq.user_presets.iter().enumerate() {
                                 let is_sel = self.eq_preset.as_deref() == Some(preset.name.as_str());
                                 if ui.selectable_label(is_sel, &preset.name).clicked() {
@@ -153,7 +153,7 @@ impl App {
                     edit.keep_preset = true;
                 }
 
-                if ui.button("Zurücksetzen").clicked() {
+                if ui.button("Reset").clicked() {
                     self.cfg.eq.reset_layout();
                     self.eq_preset = Some("Flat".to_string());
                     edit.changed = true;
@@ -163,12 +163,12 @@ impl App {
                 ui.add_space(10.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.eq_new_name)
-                        .hint_text("Name für neues Preset")
+                        .hint_text("Name for new preset")
                         .desired_width(150.0),
                 );
                 let name = self.eq_new_name.trim().to_string();
                 if ui
-                    .add_enabled(!name.is_empty(), egui::Button::new("Speichern"))
+                    .add_enabled(!name.is_empty(), egui::Button::new("Save"))
                     .clicked()
                 {
                     let preset = UserPreset {
@@ -190,7 +190,7 @@ impl App {
                     .as_ref()
                     .and_then(|n| self.cfg.eq.user_presets.iter().position(|p| &p.name == n));
                 if let Some(index) = current_user {
-                    if ui.button("Löschen").clicked() {
+                    if ui.button("Delete").clicked() {
                         self.cfg.eq.user_presets.remove(index);
                         self.eq_preset = None;
                         edit.changed = true;
@@ -413,7 +413,7 @@ impl App {
                 ui.add_space(6.0);
 
                 let band: &mut Band = &mut self.cfg.eq.bands[i];
-                if ui.checkbox(&mut band.enabled, "Aktiv").changed() {
+                if ui.checkbox(&mut band.enabled, "Active").changed() {
                     edit.changed = true;
                 }
 
@@ -433,7 +433,7 @@ impl App {
                     });
 
                 ui.add_space(6.0);
-                ui.label(RichText::new("Frequenz").color(TEXT_DIM));
+                ui.label(RichText::new("Frequency").color(TEXT_DIM));
                 let speed = (band.freq * 0.01).max(0.2);
                 if ui
                     .add(
@@ -464,7 +464,7 @@ impl App {
                     edit.changed = true;
                 }
 
-                ui.label(RichText::new("Güte (Q)").color(TEXT_DIM));
+                ui.label(RichText::new("Q factor").color(TEXT_DIM));
                 if ui
                     .add(
                         egui::DragValue::new(&mut band.q)
@@ -555,7 +555,7 @@ impl App {
                             .color(if clip { DANGER } else { TEXT }),
                     );
                     meter(ui, peak_db, FADER_HEIGHT);
-                    ui.label(RichText::new("Ausgang").size(11.5).color(TEXT_DIM));
+                    ui.label(RichText::new("Output").size(11.5).color(TEXT_DIM));
                     let gr = if self.playing && enabled { self.eq_shared.reduction_db() } else { 0.0 };
                     ui.label(
                         RichText::new(format!("Limiter {gr:.1} dB"))
@@ -568,7 +568,7 @@ impl App {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .checkbox(&mut self.cfg.eq.auto_headroom, "Auto-Headroom (verhindert Übersteuern bei Anhebungen)")
+                    .checkbox(&mut self.cfg.eq.auto_headroom, "Auto headroom (prevents clipping when boosting)")
                     .changed()
                 {
                     edit.changed = true;

@@ -269,13 +269,13 @@ pub fn presets() -> &'static [Preset] {
         Preset { name: "Rock", gains: [4.5, 3.5, 2.0, -1.0, -2.5, -0.5, 2.0, 3.5, 4.5, 4.5] },
         Preset { name: "Pop", gains: [-1.5, 1.5, 3.5, 4.0, 2.5, 0.0, -1.0, -1.5, 0.5, 1.0] },
         Preset { name: "Jazz", gains: [3.0, 2.0, 1.0, 2.0, -1.5, -1.5, 0.0, 1.5, 3.0, 3.5] },
-        Preset { name: "Klassik", gains: [3.0, 2.5, 1.5, 1.0, -0.5, -0.5, 0.0, 1.5, 2.5, 3.0] },
-        Preset { name: "Elektronik", gains: [5.0, 4.0, 1.0, 0.0, -2.0, 1.5, 0.5, 1.5, 4.0, 5.0] },
+        Preset { name: "Classical", gains: [3.0, 2.5, 1.5, 1.0, -0.5, -0.5, 0.0, 1.5, 2.5, 3.0] },
+        Preset { name: "Electronic", gains: [5.0, 4.0, 1.0, 0.0, -2.0, 1.5, 0.5, 1.5, 4.0, 5.0] },
         Preset { name: "Hip-Hop", gains: [5.0, 4.5, 2.0, 3.0, -1.0, -1.0, 1.5, -0.5, 2.0, 3.0] },
-        Preset { name: "Akustik", gains: [3.5, 3.0, 2.0, 0.5, 1.5, 1.5, 2.5, 3.0, 2.5, 1.5] },
+        Preset { name: "Acoustic", gains: [3.5, 3.0, 2.0, 0.5, 1.5, 1.5, 2.5, 3.0, 2.5, 1.5] },
         Preset { name: "Loudness", gains: [6.0, 4.0, 0.0, -1.0, -2.0, -1.0, 0.0, 2.0, 4.5, 5.5] },
-        Preset { name: "Kleine Lautsprecher", gains: [-8.0, -6.0, -3.0, 0.0, 2.0, 3.5, 4.0, 3.0, 1.5, 0.0] },
-        Preset { name: "Spät am Abend", gains: [2.0, 1.5, 0.5, 0.0, 0.0, 0.5, 1.0, 0.0, -2.5, -4.0] },
+        Preset { name: "Small speakers", gains: [-8.0, -6.0, -3.0, 0.0, 2.0, 3.5, 4.0, 3.0, 1.5, 0.0] },
+        Preset { name: "Late night", gains: [2.0, 1.5, 0.5, 0.0, 0.0, 0.5, 1.0, 0.0, -2.5, -4.0] },
     ];
     P
 }

@@ -99,7 +99,7 @@ enum PlAction {
     Delete,
 }
 
-/// Which service's link "Teilen" copies.
+/// Which service's link "Share" copies.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShareTarget {
     Tidal,
@@ -607,7 +607,7 @@ impl App {
                 }
                 Ev::Copy(text) => {
                     ctx.copy_text(text);
-                    self.toast("Link kopiert".into());
+                    self.toast("Link copied".into());
                 }
                 Ev::Open(opened, true) => {
                     // a link typed into the search: show what it points to
@@ -782,11 +782,11 @@ impl App {
             TrackAction::OpenAlbum(album) => self.open_playlist_from(album.as_playlist()),
             TrackAction::PlayNext => {
                 self.queue_insert(track, true);
-                self.toast("Wird als Nächstes gespielt".into());
+                self.toast("Playing next".into());
             }
             TrackAction::AddToQueue => {
                 self.queue_insert(track, false);
-                self.toast("Zur Warteschlange hinzugefügt".into());
+                self.toast("Added to queue".into());
             }
         }
     }
@@ -1223,10 +1223,10 @@ impl App {
             return;
         }
         if self.user.is_none() {
-            self.toast("Bitte zuerst bei TIDAL anmelden".into());
+            self.toast("Please sign in to TIDAL first".into());
             return;
         }
-        self.toast("Link wird geöffnet…".into());
+        self.toast("Opening link…".into());
         self.net.send(Cmd::OpenLink { link, show: false });
     }
 
@@ -1234,7 +1234,7 @@ impl App {
     /// Read a public Spotify playlist and show the import preview.
     fn start_import(&mut self, id: String) {
         if self.user.is_none() {
-            self.toast("Bitte zuerst bei TIDAL anmelden".into());
+            self.toast("Please sign in to TIDAL first".into());
             return;
         }
         self.push_history();
@@ -1255,14 +1255,14 @@ impl App {
         let target = match target {
             ShareTarget::Tidal => {
                 self.egui_ctx.copy_text(tidal_url);
-                self.toast("TIDAL-Link kopiert".into());
+                self.toast("TIDAL link copied".into());
                 return;
             }
             ShareTarget::Spotify => "spotify",
             ShareTarget::Youtube => "youtube_music",
             ShareTarget::All => "",
         };
-        self.toast("Link wird erstellt…".into());
+        self.toast("Creating link…".into());
         self.net.send(Cmd::Share { url: tidal_url, target: target.to_string() });
     }
 
@@ -1465,7 +1465,7 @@ impl App {
         self.playing = false;
         self.audio.send(AudioCmd::Stop);
         self.discord.send(DiscordCmd::Clear);
-        self.toast("Abgemeldet. Bitte neu starten, um dich wieder anzumelden.".into());
+        self.toast("Signed out. Restart to sign in again.".into());
     }
 
     // ------------------------------------------------------------------ draw
@@ -1495,7 +1495,7 @@ impl App {
                 (egui::FontFamily::Proportional, if home.hovered() { ui::TEXT } else { TEXT_DIM })
             };
             ui::paint_icon(painter, tile.center(), icons::HOUSE, 21.0, color, family);
-            if home.on_hover_text("Startseite").clicked() {
+            if home.on_hover_text("Home").clicked() {
                 self.go_home();
             }
         }
@@ -1544,7 +1544,7 @@ impl App {
             egui::TextEdit::singleline(&mut self.search_query)
                 .id(search_id)
                 .frame(false)
-                .hint_text(RichText::new("Was möchtest du hören?").color(TEXT_DIM))
+                .hint_text(RichText::new("What do you want to listen to?").color(TEXT_DIM))
                 .horizontal_align(egui::Align::Center)
                 .vertical_align(egui::Align::Center)
                 .margin(egui::vec2(0.0, 0.0))
@@ -1571,7 +1571,7 @@ impl App {
                 egui::FontId::proportional(15.0),
                 if x.hovered() { ui::TEXT } else { TEXT_DIM },
             );
-            if x.on_hover_text("Suche leeren").clicked() {
+            if x.on_hover_text("Clear search").clicked() {
                 self.search_query.clear();
                 self.results = None;
                 self.last_query.clear();
@@ -1666,10 +1666,10 @@ impl App {
                         });
                         ui.add_space(4.0);
                         ui.separator();
-                        if menu_item(ui, icons::GEAR, "Einstellungen").clicked() {
+                        if menu_item(ui, icons::GEAR, "Settings").clicked() {
                             open_settings = true;
                         }
-                        if menu_item(ui, icons::SIGN_OUT, "Abmelden").clicked() {
+                        if menu_item(ui, icons::SIGN_OUT, "Sign out").clicked() {
                             logout = true;
                         }
                     });
@@ -1701,14 +1701,14 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let (icon, tip) = if self.cfg.sidebar_expanded {
-                (icons::CARET_DOUBLE_LEFT, "Bibliothek einklappen")
+                (icons::CARET_DOUBLE_LEFT, "Collapse library")
             } else {
-                (icons::CARET_DOUBLE_RIGHT, "Bibliothek ausklappen")
+                (icons::CARET_DOUBLE_RIGHT, "Expand library")
             };
             toggle = ui::square_icon_button(ui, icon, 56.0, 36.0).on_hover_text(tip).clicked();
             if t > 0.6 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let add = ui::square_icon_button(ui, icons::PLUS, 36.0, 36.0).on_hover_text("Neue Playlist");
+                    let add = ui::square_icon_button(ui, icons::PLUS, 36.0, 36.0).on_hover_text("New playlist");
                     want_create = add.clicked();
                 });
             }
@@ -1733,9 +1733,9 @@ impl App {
                     let url = pl.cover_url();
                     let selected = on_playlists && open_uuid.as_deref() == Some(pl.uuid.as_str());
                     let sub = match (pl.uuid == LIKED_UUID, pl.number_of_tracks) {
-                        (true, Some(n)) => format!("Playlist · {n} Titel"),
+                        (true, Some(n)) => format!("Playlist · {n} tracks"),
                         (true, None) => "Playlist".to_string(),
-                        (false, _) => format!("Playlist · {} Titel", pl.track_count()),
+                        (false, _) => format!("Playlist · {} tracks", pl.track_count()),
                     };
                     let st = self.card_state(&pl.uuid);
                     if let Some(a) = library_row(
@@ -1760,7 +1760,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.spinner();
-                        ui.label(RichText::new("Lade Playlists…").color(TEXT_DIM));
+                        ui.label(RichText::new("Loading playlists…").color(TEXT_DIM));
                     });
                 }
             });
@@ -1835,7 +1835,7 @@ impl App {
                 let title = current
                     .as_ref()
                     .map(|t| t.title.clone())
-                    .unwrap_or_else(|| "Keine Wiedergabe".to_string());
+                    .unwrap_or_else(|| "Nothing playing".to_string());
                 ui.add(egui::Label::new(RichText::new(title).strong().size(15.0)).truncate());
                 if let Some(track) = &current {
                     want_artist = artist_links(ui, &track.artist_list(), 13.0, TEXT_DIM);
@@ -1868,20 +1868,20 @@ impl App {
             ui.add_space(((h - block) * 0.5).max(0.0));
             ui.allocate_ui_with_layout(egui::vec2(214.0, 42.0), centered, |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
-                let shuffle_tip = if self.cfg.shuffle { "Zufallswiedergabe aus" } else { "Zufallswiedergabe an" };
+                let shuffle_tip = if self.cfg.shuffle { "Shuffle off" } else { "Shuffle on" };
                 want_shuffle = icon_button(ui, Icon::Shuffle, 30.0, self.cfg.shuffle).on_hover_text(shuffle_tip).clicked();
                 want_prev = icon_button(ui, Icon::Prev, 30.0, false)
-                    .on_hover_text(format!("Zurück (Strg + {})", icons::ARROW_LEFT))
+                    .on_hover_text(format!("Previous (Ctrl + {})", icons::ARROW_LEFT))
                     .clicked();
-                let play_tip = if self.playing { "Pause (Leertaste)" } else { "Abspielen (Leertaste)" };
+                let play_tip = if self.playing { "Pause (Space)" } else { "Play (Space)" };
                 want_toggle = play_button(ui, self.playing).on_hover_text(play_tip).clicked();
                 want_next = icon_button(ui, Icon::Next, 30.0, false)
-                    .on_hover_text(format!("Weiter (Strg + {})", icons::ARROW_RIGHT))
+                    .on_hover_text(format!("Next (Ctrl + {})", icons::ARROW_RIGHT))
                     .clicked();
                 let repeat_tip = match self.cfg.repeat {
-                    RepeatMode::Off => "Wiederholen: aus",
-                    RepeatMode::All => "Wiederholen: alle",
-                    RepeatMode::One => "Wiederholen: dieser Titel",
+                    RepeatMode::Off => "Repeat: off",
+                    RepeatMode::All => "Repeat: all",
+                    RepeatMode::One => "Repeat: this track",
                 };
                 want_repeat = icon_button(
                     ui,
@@ -1926,7 +1926,7 @@ impl App {
         {
             let ui = &mut right;
             ui.spacing_mut().item_spacing.x = 6.0;
-            want_queue = icon_button(ui, Icon::Queue, 30.0, self.queue_open).on_hover_text("Warteschlange").clicked();
+            want_queue = icon_button(ui, Icon::Queue, 30.0, self.queue_open).on_hover_text("Queue").clicked();
             ui.add_space(4.0);
             let mut vol = self.cfg.volume;
             let slider_w = (ui.available_width() - 80.0).clamp(50.0, 120.0);
@@ -1947,7 +1947,7 @@ impl App {
                 v if v < 0.5 => icons::SPEAKER_LOW,
                 _ => icons::SPEAKER_HIGH,
             };
-            let mute_tip = if self.cfg.volume <= 0.0 { "Ton an (M)" } else { "Stumm (M)" };
+            let mute_tip = if self.cfg.volume <= 0.0 { "Unmute (M)" } else { "Mute (M)" };
             let speaker = ui
                 .add(egui::Label::new(RichText::new(speaker).size(18.0).color(TEXT_DIM)).sense(egui::Sense::click()))
                 .on_hover_text(mute_tip);
@@ -2041,11 +2041,11 @@ impl App {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
                             ui.add_space(8.0);
-                            ui.label(RichText::new("Zuletzt gesucht").size(12.0).color(TEXT_DIM));
+                            ui.label(RichText::new("Recent searches").size(12.0).color(TEXT_DIM));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.add_space(8.0);
                                 let all = ui.add(
-                                    egui::Label::new(RichText::new("Alle löschen").size(12.0).color(TEXT_DIM))
+                                    egui::Label::new(RichText::new("Clear all").size(12.0).color(TEXT_DIM))
                                         .sense(egui::Sense::click()),
                                 );
                                 pointer_on_hover(&all);
@@ -2156,20 +2156,20 @@ impl App {
     }
 
     fn search_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Suche");
+        ui.heading("Search");
         ui.add_space(4.0);
 
         if self.search_loading {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Suche läuft…");
+                ui.label("Searching…");
             });
         }
 
         if self.results.is_none() && !self.search_loading {
             ui.add_space(24.0);
             ui.label(
-                RichText::new("Suche nach Titeln, Alben, Künstlern oder Playlists – oder füge einen TIDAL-, Spotify-, YouTube- oder linkhop-Link ein.")
+                RichText::new("Search for tracks, albums, artists or playlists – or paste a TIDAL, Spotify, YouTube or linkhop link.")
                     .color(TEXT_DIM),
             );
         }
@@ -2179,7 +2179,7 @@ impl App {
         };
         if results.is_empty() {
             ui.add_space(16.0);
-            ui.label(RichText::new("Keine Ergebnisse.").color(TEXT_DIM));
+            ui.label(RichText::new("No results.").color(TEXT_DIM));
             return;
         }
 
@@ -2187,10 +2187,10 @@ impl App {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             for (tab, label, count) in [
-                (SearchTab::All, "Alle", usize::MAX),
-                (SearchTab::Tracks, "Titel", results.tracks.len()),
-                (SearchTab::Albums, "Alben", results.albums.len()),
-                (SearchTab::Artists, "Künstler", results.artists.len()),
+                (SearchTab::All, "All", usize::MAX),
+                (SearchTab::Tracks, "Tracks", results.tracks.len()),
+                (SearchTab::Albums, "Albums", results.albums.len()),
+                (SearchTab::Artists, "Artists", results.artists.len()),
                 (SearchTab::Playlists, "Playlists", results.playlists.len()),
             ] {
                 if count == 0 {
@@ -2214,7 +2214,7 @@ impl App {
         let current_id = self.current.as_ref().map(|t| t.id);
 
         if (all || tab == SearchTab::Tracks) && !results.tracks.is_empty() {
-            ui.label(RichText::new("Titel").strong().size(18.0));
+            ui.label(RichText::new("Tracks").strong().size(18.0));
             ui.add_space(4.0);
             let limit = if all { 5 } else { results.tracks.len() };
             for (i, track) in results.tracks.iter().take(limit).enumerate() {
@@ -2229,7 +2229,7 @@ impl App {
         }
 
         if (all || tab == SearchTab::Albums) && !results.albums.is_empty() {
-            ui.label(RichText::new("Alben").strong().size(18.0));
+            ui.label(RichText::new("Albums").strong().size(18.0));
             ui.add_space(4.0);
             let limit = if all { 6 } else { results.albums.len() };
             ui.horizontal_wrapped(|ui| {
@@ -2250,7 +2250,7 @@ impl App {
         }
 
         if (all || tab == SearchTab::Artists) && !results.artists.is_empty() {
-            ui.label(RichText::new("Künstler").strong().size(18.0));
+            ui.label(RichText::new("Artists").strong().size(18.0));
             ui.add_space(4.0);
             let limit = if all { 6 } else { results.artists.len() };
             ui.horizontal_wrapped(|ui| {
@@ -2258,7 +2258,7 @@ impl App {
                     let url = artist.picture_url(320);
                     let pl = Playlist {
                         uuid: format!("artist:{}", artist.id),
-                        title: format!("{} · Beliebteste Titel", artist.name),
+                        title: format!("{} · Top tracks", artist.name),
                         square_image: url.clone(),
                         creator: Some(crate::model::PlaylistCreator {
                             id: None,
@@ -2267,7 +2267,7 @@ impl App {
                         ..Default::default()
                     };
                     let st = self.card_state(&pl.uuid);
-                    if let Some(a) = media_card(ui, &self.textures, url.as_deref(), false, true, &artist.name, "Künstler", &st) {
+                    if let Some(a) = media_card(ui, &self.textures, url.as_deref(), false, true, &artist.name, "Artists", &st) {
                         act = Some((pl, a));
                     }
                     if let Some(u) = url {
@@ -2285,7 +2285,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 for pl in results.playlists.iter().take(limit) {
                     let url = pl.cover_url();
-                    let sub = format!("{} Titel", pl.track_count());
+                    let sub = format!("{} tracks", pl.track_count());
                     let st = self.card_state(&pl.uuid);
                     if let Some(a) = media_card(ui, &self.textures, url.as_deref(), false, false, &pl.title, &sub, &st) {
                         act = Some((pl.clone(), a));
@@ -2317,9 +2317,9 @@ impl App {
         }
 
         ui.horizontal(|ui| {
-            ui.heading("Startseite");
+            ui.heading("Home");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if action_button(ui, icons::ARROW_CLOCKWISE, "Aktualisieren", false).clicked() {
+                if action_button(ui, icons::ARROW_CLOCKWISE, "Refresh", false).clicked() {
                     self.playlists_loading = true;
                     self.net.send(Cmd::LoadUser);
                 }
@@ -2327,7 +2327,7 @@ impl App {
         });
         ui.add_space(6.0);
 
-        let mine = ("Deine Playlists".to_string(), self.all_playlists());
+        let mine = ("Your playlists".to_string(), self.all_playlists());
         let mut sections: Vec<(String, Vec<Playlist>)> = Vec::new();
         let (mixes, rest): (Vec<_>, Vec<_>) = self
             .home
@@ -2348,7 +2348,7 @@ impl App {
                 for pl in list {
                     let url = pl.cover_url();
                     let sub = match (&pl.description, &pl.creator) {
-                        _ if pl.uuid == LIKED_UUID => "Deine Favoriten".to_string(),
+                        _ if pl.uuid == LIKED_UUID => "Your favorites".to_string(),
                         (Some(d), _) if pl.uuid.starts_with("mix:") => d.clone(),
                         (_, Some(c)) => c.name.clone().unwrap_or_default(),
                         _ => String::new(),
@@ -2376,7 +2376,7 @@ impl App {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Playlists werden geladen…");
+                ui.label("Loading playlists…");
             });
         }
         self.request_all(want);
@@ -2388,7 +2388,7 @@ impl App {
     fn all_playlists(&self) -> Vec<Playlist> {
         let mut all = vec![Playlist {
             uuid: LIKED_UUID.to_string(),
-            title: "Gelikte Songs".to_string(),
+            title: "Liked Songs".to_string(),
             number_of_tracks: self.liked_count.map(|n| n as u32),
             creator: Some(crate::model::PlaylistCreator {
                 id: None,
@@ -2459,7 +2459,7 @@ impl App {
                 ui.set_width(360.0);
                 match dialog {
                     Dialog::Rename { uuid, mut text } => {
-                        ui.heading("Playlist umbenennen");
+                        ui.heading("Rename playlist");
                         ui.add_space(8.0);
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut text)
@@ -2474,8 +2474,8 @@ impl App {
                         let ok = !text.trim().is_empty();
                         let (mut done, mut cancel) = (false, false);
                         ui.horizontal(|ui| {
-                            done = ui.add_enabled(ok, egui::Button::new("Umbenennen")).clicked();
-                            cancel = ui.button("Abbrechen").clicked();
+                            done = ui.add_enabled(ok, egui::Button::new("Rename")).clicked();
+                            cancel = ui.button("Cancel").clicked();
                         });
                         if (done || enter) && ok {
                             confirm = Some(Dialog::Rename { uuid, text });
@@ -2484,11 +2484,11 @@ impl App {
                         }
                     }
                     Dialog::Create { mut text } => {
-                        ui.heading("Neue Playlist");
+                        ui.heading("New playlist");
                         ui.add_space(8.0);
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut text)
-                                .hint_text("Name der Playlist")
+                                .hint_text("Playlist name")
                                 .margin(egui::vec2(10.0, 8.0))
                                 .desired_width(f32::INFINITY),
                         );
@@ -2500,8 +2500,8 @@ impl App {
                         let ok = !text.trim().is_empty();
                         let (mut done, mut cancel) = (false, false);
                         ui.horizontal(|ui| {
-                            done = ui.add_enabled(ok, egui::Button::new("Erstellen")).clicked();
-                            cancel = ui.button("Abbrechen").clicked();
+                            done = ui.add_enabled(ok, egui::Button::new("Create")).clicked();
+                            cancel = ui.button("Cancel").clicked();
                         });
                         if (done || enter) && ok {
                             confirm = Some(Dialog::Create { text });
@@ -2510,16 +2510,16 @@ impl App {
                         }
                     }
                     Dialog::Delete { uuid, title } => {
-                        ui.heading("Playlist löschen?");
+                        ui.heading("Delete playlist?");
                         ui.add_space(8.0);
-                        ui.label(format!("„{title}“ wird endgültig gelöscht."));
+                        ui.label(format!("“{title}” will be deleted permanently."));
                         ui.add_space(10.0);
                         let (mut done, mut cancel) = (false, false);
                         ui.horizontal(|ui| {
                             done = ui
-                                .add(egui::Button::new(RichText::new("Löschen").color(ui::DANGER)))
+                                .add(egui::Button::new(RichText::new("Delete").color(ui::DANGER)))
                                 .clicked();
-                            cancel = ui.button("Abbrechen").clicked();
+                            cancel = ui.button("Cancel").clicked();
                         });
                         if done {
                             confirm = Some(Dialog::Delete { uuid, title });
@@ -2606,7 +2606,7 @@ impl App {
         };
 
         ui.horizontal(|ui| {
-            if action_button(ui, icons::ARROW_LEFT, "Zurück", false).clicked() {
+            if action_button(ui, icons::ARROW_LEFT, "Back", false).clicked() {
                 self.go_back();
             }
         });
@@ -2627,13 +2627,13 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(format!("{} Titel", open.tracks.len()))
+                    RichText::new(format!("{} tracks", open.tracks.len()))
                         .weak()
                         .size(12.0),
                 );
                 ui.add_space(8.0);
                 if !open.tracks.is_empty()
-                    && action_button(ui, icons::PLAY, "Alle abspielen", true).clicked()
+                    && action_button(ui, icons::PLAY, "Play all", true).clicked()
                 {
                     self.play_tracks(open.tracks.clone(), 0, Some(open.uuid.clone()));
                 }
@@ -2645,12 +2645,12 @@ impl App {
         if open.loading {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Titel werden geladen…");
+                ui.label("Loading tracks…");
             });
             return;
         }
         if open.tracks.is_empty() {
-            ui.label(RichText::new("Diese Playlist ist leer.").weak());
+            ui.label(RichText::new("This playlist is empty.").weak());
             return;
         }
 
@@ -2682,7 +2682,7 @@ impl App {
 
     fn import_view(&mut self, ui: &mut egui::Ui) {
         let Some(mut st) = self.import.take() else { return };
-        if action_button(ui, icons::ARROW_LEFT, "Zurück", false).clicked() {
+        if action_button(ui, icons::ARROW_LEFT, "Back", false).clicked() {
             self.go_back();
             return;
         }
@@ -2691,7 +2691,7 @@ impl App {
             self.import = Some(st);
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new("Spotify-Playlist wird gelesen…").color(TEXT_DIM));
+                ui.label(RichText::new("Reading Spotify playlist…").color(TEXT_DIM));
             });
             return;
         }
@@ -2714,7 +2714,7 @@ impl App {
             ui.add_space(14.0);
             ui.vertical(|ui| {
                 ui.add_space(4.0);
-                ui.label(RichText::new("SPOTIFY-PLAYLIST IMPORTIEREN").size(11.5).strong().color(ACCENT));
+                ui.label(RichText::new("IMPORT SPOTIFY PLAYLIST").size(11.5).strong().color(ACCENT));
                 ui.add_space(2.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut st.title)
@@ -2730,14 +2730,14 @@ impl App {
                             .fill(ACCENT),
                     );
                     ui.label(
-                        RichText::new(format!("{done} / {total} Titel zugeordnet"))
+                        RichText::new(format!("{done} / {total} tracks matched"))
                             .size(12.5)
                             .color(TEXT_DIM),
                     );
                 } else {
                     ui.label(
                         RichText::new(format!(
-                            "{found} von {total} zugeordnet · {unsure} unsicher · {missing} nicht gefunden"
+                            "{found} of {total} matched · {unsure} unsure · {missing} not found"
                         ))
                         .color(TEXT_DIM),
                     );
@@ -2746,14 +2746,14 @@ impl App {
                 ui.horizontal(|ui| {
                     let ready = done == total && selected > 0 && !st.title.trim().is_empty();
                     ui.add_enabled_ui(ready, |ui| {
-                        if action_button(ui, icons::PLUS, &format!("Als TIDAL-Playlist anlegen ({selected})"), true)
+                        if action_button(ui, icons::PLUS, &format!("Create as TIDAL playlist ({selected})"), true)
                             .clicked()
                         {
                             create = true;
                         }
                     });
                     if unsure > 0
-                        && action_button(ui, icons::X, "Unsichere abwählen", false).clicked()
+                        && action_button(ui, icons::X, "Deselect uncertain", false).clicked()
                     {
                         for item in st.items.iter_mut().filter(|i| !i.sure) {
                             item.selected = false;
@@ -2765,7 +2765,7 @@ impl App {
         if total >= 100 {
             ui.add_space(6.0);
             ui.label(
-                RichText::new("Spotify liefert höchstens 100 Titel – die Playlist ist evtl. länger.")
+                RichText::new("Spotify returns at most 100 tracks – the playlist may be longer.")
                     .size(12.5)
                     .color(ui::WARN),
             );
@@ -2789,7 +2789,7 @@ impl App {
                 .filter_map(|i| i.found.as_ref().map(|t| t.id))
                 .collect();
             self.net.send(Cmd::ImportCreate { title: st.title.trim().to_string(), track_ids });
-            self.toast("Playlist wird erstellt…".into());
+            self.toast("Creating playlist…".into());
             self.go_home();
             return;
         }
@@ -2804,7 +2804,7 @@ impl App {
         };
         let artist = &page.artist;
 
-        if action_button(ui, icons::ARROW_LEFT, "Zurück", false).clicked() {
+        if action_button(ui, icons::ARROW_LEFT, "Back", false).clicked() {
             self.go_back();
         }
         ui.add_space(10.0);
@@ -2822,16 +2822,16 @@ impl App {
             ui.add_space(14.0);
             ui.vertical(|ui| {
                 ui.add_space(26.0);
-                ui.label(RichText::new("KÜNSTLER").size(11.5).strong().color(ACCENT));
+                ui.label(RichText::new("ARTIST").size(11.5).strong().color(ACCENT));
                 ui.label(RichText::new(&artist.name).size(34.0).strong());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if !page.top_tracks.is_empty()
-                        && action_button(ui, icons::PLAY, "Abspielen", true).clicked()
+                        && action_button(ui, icons::PLAY, "Play", true).clicked()
                     {
                         play_top = true;
                     }
-                    if action_button(ui, icons::SHARE_NETWORK, "Teilen", false).clicked() {
+                    if action_button(ui, icons::SHARE_NETWORK, "Share", false).clicked() {
                         share = true;
                     }
                 });
@@ -2842,7 +2842,7 @@ impl App {
         if page.top_tracks.is_empty() && !page.done {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new("Wird geladen…").color(TEXT_DIM));
+                ui.label(RichText::new("Loading…").color(TEXT_DIM));
             });
         }
 
@@ -2853,7 +2853,7 @@ impl App {
         let current_id = self.current.as_ref().map(|t| t.id);
 
         if !page.top_tracks.is_empty() {
-            section_title(ui, "Beliebte Titel");
+            section_title(ui, "Popular tracks");
             let limit = if self.artist_all_tracks { page.top_tracks.len() } else { 5 };
             for (i, track) in page.top_tracks.iter().take(limit).enumerate() {
                 let ctx = TrackCtx { liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
@@ -2874,9 +2874,9 @@ impl App {
             if page.top_tracks.len() > 5 {
                 ui.add_space(4.0);
                 let (icon, label) = if self.artist_all_tracks {
-                    (icons::CARET_RIGHT, "Weniger anzeigen")
+                    (icons::CARET_RIGHT, "Show less")
                 } else {
-                    (icons::CARET_RIGHT, "Alle anzeigen")
+                    (icons::CARET_RIGHT, "Show all")
                 };
                 if action_button(ui, icon, label, false).clicked() {
                     self.artist_all_tracks = !self.artist_all_tracks;
@@ -2885,7 +2885,7 @@ impl App {
         }
 
         for (title, list) in [
-            ("Alben", &page.albums),
+            ("Albums", &page.albums),
             ("EPs", &page.eps),
             ("Singles", &page.singles),
             ("Compilations", &page.compilations),
@@ -2920,7 +2920,7 @@ impl App {
             && page.singles.is_empty()
             && page.compilations.is_empty()
         {
-            ui.label(RichText::new("Keine Veröffentlichungen gefunden.").color(TEXT_DIM));
+            ui.label(RichText::new("No releases found.").color(TEXT_DIM));
         }
 
         self.request_all(want);
@@ -2948,7 +2948,7 @@ impl App {
 
         // top bar: close on the left, tabs on the right
         ui.horizontal(|ui| {
-            if action_button(ui, icons::CARET_DOWN, "Schließen", false).clicked() {
+            if action_button(ui, icons::CARET_DOWN, "Close", false).clicked() {
                 close = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3040,13 +3040,13 @@ impl App {
             ui.add_space(40.0);
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new("Lyrics werden geladen…").color(TEXT_DIM));
+                ui.label(RichText::new("Loading lyrics…").color(TEXT_DIM));
             });
             return None;
         };
         if lyrics.is_empty() {
             ui.add_space(40.0);
-            ui.label(RichText::new("Für diesen Titel sind keine Lyrics verfügbar.").size(16.0).color(TEXT_DIM));
+            ui.label(RichText::new("No lyrics available for this track.").size(16.0).color(TEXT_DIM));
             return None;
         }
 
@@ -3104,13 +3104,13 @@ impl App {
             ui.add_space(40.0);
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(RichText::new("Credits werden geladen…").color(TEXT_DIM));
+                ui.label(RichText::new("Loading credits…").color(TEXT_DIM));
             });
             return None;
         };
         if groups.is_empty() {
             ui.add_space(40.0);
-            ui.label(RichText::new("Für diesen Titel sind keine Credits verfügbar.").size(16.0).color(TEXT_DIM));
+            ui.label(RichText::new("No credits available for this track.").size(16.0).color(TEXT_DIM));
             return None;
         }
         let mut groups = groups;
@@ -3171,7 +3171,7 @@ impl App {
 
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            ui.label(RichText::new("Warteschlange").strong().size(18.0));
+            ui.label(RichText::new("Queue").strong().size(18.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
                 pointer_on_hover(&resp);
@@ -3190,18 +3190,18 @@ impl App {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if let Some(track) = &self.current {
-                    queue_heading(ui, "Läuft gerade", None);
+                    queue_heading(ui, "Now playing", None);
                     queue_row(ui, &self.textures, track, true, &mut want);
                 }
                 if upcoming.is_empty() {
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         ui.add_space(8.0);
-                        ui.label(RichText::new("Keine weiteren Titel in der Warteschlange.").color(TEXT_DIM));
+                        ui.label(RichText::new("No more tracks in the queue.").color(TEXT_DIM));
                     });
                     return;
                 }
-                if queue_heading(ui, "Als Nächstes", Some("Leeren")) {
+                if queue_heading(ui, "Next up", Some("Clear")) {
                     act = Some(Act::Clear);
                 }
                 for &idx in upcoming.iter().take(150) {
@@ -3267,18 +3267,18 @@ impl App {
                             ui.add_space(18.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(18.0);
-                                ui.label(RichText::new("Einstellungen").strong().size(18.0));
+                                ui.label(RichText::new("Settings").strong().size(18.0));
                             });
                             ui.add_space(14.0);
                             egui::Frame::new()
                                 .inner_margin(egui::Margin::symmetric(10, 0))
                                 .show(ui, |ui| {
                                     for (tab, icon, label) in [
-                                        (SettingsTab::Playback, icons::PLAY_CIRCLE, "Wiedergabe"),
+                                        (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback"),
                                         (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer"),
                                         (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord"),
                                         (SettingsTab::System, icons::DESKTOP, "System"),
-                                        (SettingsTab::Account, icons::USER_CIRCLE, "Konto"),
+                                        (SettingsTab::Account, icons::USER_CIRCLE, "Account"),
                                     ] {
                                         if nav_item(ui, icon, label, self.settings_tab == tab, None).clicked() {
                                             self.settings_tab = tab;
@@ -3323,31 +3323,31 @@ impl App {
     fn settings_content(&mut self, ui: &mut egui::Ui) {
         match self.settings_tab {
             SettingsTab::Playback => {
-                ui.heading("Wiedergabe");
+                ui.heading("Playback");
                 ui.add_space(8.0);
 
                 ui.add_space(10.0);
                 self.transition_settings(ui);
                 ui.add_space(10.0);
-                settings_label(ui, "Tastenkürzel");
+                settings_label(ui, "Keyboard shortcuts");
                 // each entry: alternatives separated by " / ", keys within one by "+"
                 egui::Grid::new("shortcuts").num_columns(2).spacing([28.0, 8.0]).show(ui, |ui| {
                     // arrows come from the icon font; the text font has none
                     let (l, r, u, d) = (icons::ARROW_LEFT, icons::ARROW_RIGHT, icons::ARROW_UP, icons::ARROW_DOWN);
                     for (keys, what) in [
-                        ("Leertaste".to_string(), "Abspielen / Pause"),
-                        (format!("Strg+{r} / Strg+{l}"), "Nächster / vorheriger Titel"),
-                        (format!("{r} / {l}"), "10 Sekunden vor / zurück"),
-                        (format!("{u} / {d}"), "Lauter / leiser"),
-                        ("M".to_string(), "Stumm"),
-                        ("Strg+F / /".to_string(), "Suchen"),
-                        ("Esc".to_string(), "Vollbild schließen"),
+                        ("Space".to_string(), "Play / Pause"),
+                        (format!("Ctrl+{r} / Ctrl+{l}"), "Next / previous track"),
+                        (format!("{r} / {l}"), "Seek 10 seconds forward / back"),
+                        (format!("{u} / {d}"), "Volume up / down"),
+                        ("M".to_string(), "Mute"),
+                        ("Ctrl+F / /".to_string(), "Search"),
+                        ("Esc".to_string(), "Close full-screen player"),
                     ] {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             for (i, combo) in keys.split(" / ").enumerate() {
                                 if i > 0 {
-                                    ui.label(RichText::new("oder").size(11.5).color(TEXT_DIM));
+                                    ui.label(RichText::new("or").size(11.5).color(TEXT_DIM));
                                 }
                                 for (j, key) in combo.split('+').enumerate() {
                                     if j > 0 {
@@ -3363,10 +3363,10 @@ impl App {
                 });
 
                 ui.add_space(10.0);
-                settings_label(ui, "Ausgabegerät");
+                settings_label(ui, "Output device");
                 let devices = self.devices.clone();
                 let selected = if self.cfg.output_device.is_empty() {
-                    "Standardgerät".to_string()
+                    "Default device".to_string()
                 } else {
                     devices
                         .iter()
@@ -3381,7 +3381,7 @@ impl App {
                     .show_ui(ui, |ui| {
                         ui::green_selection(ui);
                         if ui
-                            .selectable_label(self.cfg.output_device.is_empty(), "Standardgerät")
+                            .selectable_label(self.cfg.output_device.is_empty(), "Default device")
                             .clicked()
                         {
                             picked = Some(String::new());
@@ -3404,7 +3404,7 @@ impl App {
                 ui.heading("Discord");
                 ui.add_space(8.0);
                 let mut discord = self.cfg.discord;
-                if ui.checkbox(&mut discord, "Rich Presence aktivieren").changed() {
+                if ui.checkbox(&mut discord, "Enable Rich Presence").changed() {
                     self.cfg.discord = discord;
                     if discord {
                         self.discord.send(DiscordCmd::Connect);
@@ -3421,13 +3421,13 @@ impl App {
                     self.touch();
                 }
                 ui.label(
-                    RichText::new("Zeigt in Discord an, was du hörst: Titel „by“ Künstler, mit Cover und Fortschritt.")
+                    RichText::new("Shows what you are listening to in Discord: title “by” artist, with cover art and progress.")
                         .color(TEXT_DIM),
                 );
                 if let Some(track) = &self.current {
                     ui.add_space(12.0);
                     ui::card().show(ui, |ui| {
-                        ui.label(RichText::new("Vorschau").size(12.0).color(TEXT_DIM));
+                        ui.label(RichText::new("Preview").size(12.0).color(TEXT_DIM));
                         ui.label(RichText::new(&track.title).strong());
                         ui.label(RichText::new(format!("by {}", track.artist_name())).color(TEXT_DIM));
                     });
@@ -3438,22 +3438,22 @@ impl App {
                 ui.add_space(8.0);
 
                 let mut media = self.cfg.media_keys;
-                if ui.checkbox(&mut media, "Medientasten und Mediensteuerung").changed() {
+                if ui.checkbox(&mut media, "Media keys and media controls").changed() {
                     self.cfg.media_keys = media;
                     self.system.set_media(media);
                     self.touch();
                 }
                 ui.label(
                     RichText::new(
-                        "Steuert tidalfast über die Medientasten und zeigt den Titel in den Medien-Widgets des \
-                         Desktops (KDE, GNOME, Waybar, playerctl …) bzw. im Windows-Medien-Overlay.",
+                        "Control tidalfast with your media keys and show the current track in your desktop's \
+                         media widgets (KDE, GNOME, Waybar, playerctl …) or the Windows media overlay.",
                     )
                     .color(TEXT_DIM),
                 );
 
                 ui.add_space(14.0);
                 let mut tray = self.cfg.tray;
-                if ui.checkbox(&mut tray, "Tray-Icon anzeigen").changed() {
+                if ui.checkbox(&mut tray, "Show tray icon").changed() {
                     self.cfg.tray = tray;
                     self.system.set_tray(tray);
                     if !tray && self.window_hidden {
@@ -3464,9 +3464,9 @@ impl App {
                 }
                 ui.label(
                     RichText::new(
-                        "Linksklick zeigt oder versteckt das Fenster, Rechtsklick öffnet das Menü. Unter Linux \
-                         funktioniert das mit KDE, Waybar, XFCE und anderen Leisten mit StatusNotifier-Unterstützung; \
-                         GNOME braucht die Erweiterung „AppIndicator and KStatusNotifierItem Support“.",
+                        "Left click shows or hides the window, right click opens the menu. On Linux this works \
+                         with KDE, Waybar, XFCE and other bars with StatusNotifier support; GNOME needs the \
+                         “AppIndicator and KStatusNotifierItem Support” extension.",
                     )
                     .color(TEXT_DIM),
                 );
@@ -3474,26 +3474,26 @@ impl App {
                 ui.add_space(14.0);
                 let mut close_to_tray = self.cfg.close_to_tray;
                 if ui
-                    .add_enabled(self.cfg.tray, egui::Checkbox::new(&mut close_to_tray, "Beim Schließen im Tray weiterlaufen"))
+                    .add_enabled(self.cfg.tray, egui::Checkbox::new(&mut close_to_tray, "Keep running in the tray when closed"))
                     .changed()
                 {
                     self.cfg.close_to_tray = close_to_tray;
                     self.touch();
                 }
                 ui.label(
-                    RichText::new("Das Schließen des Fensters versteckt tidalfast nur; die Musik läuft weiter. „Beenden“ im Tray-Menü beendet die App.")
+                    RichText::new("Closing the window only hides tidalfast; the music keeps playing. “Quit” in the tray menu exits the app.")
                         .color(TEXT_DIM),
                 );
             }
             SettingsTab::Account => {
-                ui.heading("Konto");
+                ui.heading("Account");
                 ui.add_space(8.0);
                 if let Some(user) = &self.user {
                     ui.label(RichText::new(&user.name).strong().size(17.0));
                     ui.label(RichText::new(format!("Region: {}", user.country)).color(TEXT_DIM));
                 }
                 ui.add_space(12.0);
-                if ui.button("Abmelden").clicked() {
+                if ui.button("Sign out").clicked() {
                     self.settings_open = false;
                     self.logout();
                 }
@@ -3508,11 +3508,11 @@ impl App {
     }
 
     fn transition_settings(&mut self, ui: &mut egui::Ui) {
-        settings_label(ui, "Übergänge zwischen Titeln");
+        settings_label(ui, "Transitions between tracks");
         let before = (self.cfg.transition, self.cfg.crossfade_secs);
         ui.horizontal(|ui| {
             for (mode, label) in [
-                (TransitionMode::Off, "Lückenlos"),
+                (TransitionMode::Off, "Gapless"),
                 (TransitionMode::Crossfade, "Crossfade"),
             ] {
                 let width = 30.0 + label.chars().count() as f32 * 7.5;
@@ -3522,13 +3522,13 @@ impl App {
             }
         });
         let help = match self.cfg.transition {
-            TransitionMode::Off => "Der nächste Titel beginnt ohne Pause, sobald der aktuelle endet.",
-            TransitionMode::Crossfade => "Die letzten Sekunden eines Titels werden in den nächsten übergeblendet.",
+            TransitionMode::Off => "The next track starts without a pause as soon as the current one ends.",
+            TransitionMode::Crossfade => "The last seconds of a track fade into the next one.",
         };
         ui.label(RichText::new(help).size(12.5).color(TEXT_DIM));
         if self.cfg.transition != TransitionMode::Off {
             ui.add_space(4.0);
-            settings_label(ui, "Dauer der Überblendung");
+            settings_label(ui, "Crossfade length");
             ui.spacing_mut().slider_width = 300.0;
             ui.add(
                 egui::Slider::new(&mut self.cfg.crossfade_secs, 0.5..=15.0)
@@ -3551,11 +3551,11 @@ impl App {
             ui.add_space(60.0);
             ui.label(RichText::new("tidalfast").size(36.0).strong().color(ACCENT));
             ui.add_space(6.0);
-            ui.label(RichText::new("Ein nativer TIDAL-Client").weak());
+            ui.label(RichText::new("A native TIDAL client").weak());
             ui.add_space(30.0);
 
             if let Some(code) = &self.device_code {
-                ui.label("Melde dich im Browser an und gib folgenden Code ein:");
+                ui.label("Sign in in your browser and enter this code:");
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(&code.user_code)
@@ -3569,7 +3569,7 @@ impl App {
                     .uri_complete
                     .clone()
                     .unwrap_or_else(|| code.uri.clone());
-                if ui.button("Im Browser öffnen").clicked() {
+                if ui.button("Open in browser").clicked() {
                     open_url(&url);
                 }
                 ui.add_space(4.0);
@@ -3577,12 +3577,12 @@ impl App {
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Warte auf Bestätigung…");
+                    ui.label("Waiting for confirmation…");
                 });
             } else {
                 let button =
                     egui::Button::new(
-                        RichText::new("  Mit TIDAL anmelden  ").size(16.0).strong().color(BG),
+                        RichText::new("  Sign in with TIDAL  ").size(16.0).strong().color(BG),
                     )
                     .fill(ACCENT);
                 if ui.add_enabled(!self.login_busy, button).clicked() {
@@ -3593,7 +3593,7 @@ impl App {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Verbindung wird vorbereitet…");
+                        ui.label("Preparing connection…");
                     });
                 }
             }
@@ -3913,32 +3913,32 @@ fn track_menu(
 ) {
     ui.set_min_width(230.0);
     let item = |icon: &str, label: &str| format!("{icon}  {label}");
-    if ui.button(item(icons::PLAY, "Abspielen")).clicked() {
+    if ui.button(item(icons::PLAY, "Play")).clicked() {
         *action = Some((track.clone(), TrackAction::Play));
         ui.close_menu();
     }
-    if ui.button(item(icons::QUEUE, "Als Nächstes abspielen")).clicked() {
+    if ui.button(item(icons::QUEUE, "Play next")).clicked() {
         *action = Some((track.clone(), TrackAction::PlayNext));
         ui.close_menu();
     }
-    if ui.button(item(icons::PLUS, "Zur Warteschlange hinzufügen")).clicked() {
+    if ui.button(item(icons::PLUS, "Add to queue")).clicked() {
         *action = Some((track.clone(), TrackAction::AddToQueue));
         ui.close_menu();
     }
     ui.separator();
     let like_label = if liked {
-        "Aus Gelikten Songs entfernen"
+        "Remove from Liked Songs"
     } else {
-        "Zu Gelikten Songs hinzufügen"
+        "Add to Liked Songs"
     };
     if ui.button(item(icons::HEART, like_label)).clicked() {
         *action = Some((track.clone(), TrackAction::SetLiked(!liked)));
         ui.close_menu();
     }
-    ui.menu_button(item(icons::LIST_PLUS, "Zu Playlist hinzufügen"), |ui| {
+    ui.menu_button(item(icons::LIST_PLUS, "Add to playlist"), |ui| {
         ui.set_min_width(200.0);
         if ctx.playlists.is_empty() {
-            ui.label(RichText::new("Keine eigenen Playlists").color(TEXT_DIM));
+            ui.label(RichText::new("No playlists of your own").color(TEXT_DIM));
         }
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for pl in ctx.playlists {
@@ -3957,7 +3957,7 @@ fn track_menu(
     });
     ui.separator();
     if let Some(album) = track.album.as_ref().filter(|a| a.id != 0) {
-        if ui.button(item(icons::VINYL_RECORD, "Zum Album")).clicked() {
+        if ui.button(item(icons::VINYL_RECORD, "Go to album")).clicked() {
             let mut album = album.clone();
             if album.artists.is_empty() {
                 album.artists = track.artist_list();
@@ -3970,13 +3970,13 @@ fn track_menu(
     match artists.as_slice() {
         [] => {}
         [only] => {
-            if ui.button(item(icons::MICROPHONE_STAGE, "Zum Künstler")).clicked() {
+            if ui.button(item(icons::MICROPHONE_STAGE, "Go to artist")).clicked() {
                 *action = Some((track.clone(), TrackAction::OpenArtist(only.clone())));
                 ui.close_menu();
             }
         }
         many => {
-            ui.menu_button(item(icons::MICROPHONE_STAGE, "Zu Künstler"), |ui| {
+            ui.menu_button(item(icons::MICROPHONE_STAGE, "Go to artist"), |ui| {
                 for artist in many {
                     if ui.button(ellipsize(&artist.name, 32)).clicked() {
                         *action = Some((track.clone(), TrackAction::OpenArtist(artist.clone())));
@@ -3988,20 +3988,20 @@ fn track_menu(
     }
     ui.separator();
     let mut target = None;
-    ui.menu_button(item(icons::SHARE_NETWORK, "Teilen"), |ui| share_menu(ui, &mut target));
+    ui.menu_button(item(icons::SHARE_NETWORK, "Share"), |ui| share_menu(ui, &mut target));
     if let Some(t) = target {
         *action = Some((track.clone(), TrackAction::Share(t)));
     }
 }
 
-/// Hovering "Teilen" opens one button per service.
+/// Hovering "Share" opens one button per service.
 fn share_menu(ui: &mut egui::Ui, target: &mut Option<ShareTarget>) {
     ui.set_min_width(190.0);
     for (icon, label, t) in [
         (icons::WAVES, "TIDAL", ShareTarget::Tidal),
         (icons::SPOTIFY_LOGO, "Spotify", ShareTarget::Spotify),
         (icons::YOUTUBE_LOGO, "YouTube", ShareTarget::Youtube),
-        (icons::LINK, "Alle Dienste", ShareTarget::All),
+        (icons::LINK, "All services", ShareTarget::All),
     ] {
         if ui.button(format!("{icon}  {label}")).clicked() {
             *target = Some(t);
@@ -4267,28 +4267,7 @@ fn credit_priority(role: &str) -> u8 {
 }
 
 fn credit_role(role: &str) -> String {
-    let known = match role {
-        "Composer" => "Komponist",
-        "Lyricist" => "Texter",
-        "Songwriter" => "Songwriter",
-        "Producer" => "Produzent",
-        "Co-Producer" => "Co-Produzent",
-        "Background Vocalist" => "Backing-Gesang",
-        "Vocals" | "Vocalist" | "Lead Vocals" => "Gesang",
-        "Engineer" => "Toningenieur",
-        "Mixing Engineer" => "Mixing",
-        "Mastering Engineer" => "Mastering",
-        "Recording Engineer" => "Aufnahme",
-        "Guitar" => "Gitarre",
-        "Drum Kit" | "Drums" => "Schlagzeug",
-        "Keyboard" => "Keyboard",
-        "Piano" => "Klavier",
-        "Bass" => "Bass",
-        "Programmer" => "Programmierung",
-        "Arranger" => "Arrangement",
-        _ => role,
-    };
-    known.to_uppercase()
+    role.to_uppercase()
 }
 
 /// One import entry: checkbox, TIDAL match and status. True when clicked.
@@ -4346,10 +4325,10 @@ fn import_row(
     child.add(egui::Label::new(RichText::new(sub).size(12.5).color(sub_color)).truncate());
 
     let (status, status_color) = match (&item.found, item.checked, item.sure) {
-        (Some(_), _, true) => ("sicher", ui::OK),
-        (Some(_), _, false) => ("unsicher", ui::WARN),
-        (None, true, _) => ("nicht gefunden", ui::DANGER),
-        (None, false, _) => ("wird gesucht…", TEXT_DIM),
+        (Some(_), _, true) => ("sure", ui::OK),
+        (Some(_), _, false) => ("unsure", ui::WARN),
+        (None, true, _) => ("not found", ui::DANGER),
+        (None, false, _) => ("searching…", TEXT_DIM),
     };
     ui.painter().text(
         egui::pos2(rect.right() - 14.0, mid),
@@ -4521,34 +4500,34 @@ fn playing_bars(ui: &egui::Ui, center: egui::Pos2, height: f32, color: Color32, 
 fn playlist_menu(ui: &mut egui::Ui, st: &CardState, action: &mut Option<PlAction>) {
     ui.set_min_width(190.0);
     let (play_icon, play_label) = if st.playing_here && st.playing {
-        (icons::PAUSE, "Pausieren")
+        (icons::PAUSE, "Pause")
     } else {
-        (icons::PLAY, "Abspielen")
+        (icons::PLAY, "Play")
     };
     if ui.button(format!("{play_icon}  {play_label}")).clicked() {
         *action = Some(PlAction::Play);
         ui.close_menu();
     }
-    if ui.button(format!("{}  Öffnen", icons::FOLDER_OPEN)).clicked() {
+    if ui.button(format!("{}  Open", icons::FOLDER_OPEN)).clicked() {
         *action = Some(PlAction::Open);
         ui.close_menu();
     }
     if st.shareable {
         ui.separator();
         let mut target = None;
-        ui.menu_button(format!("{}  Teilen", icons::SHARE_NETWORK), |ui| share_menu(ui, &mut target));
+        ui.menu_button(format!("{}  Share", icons::SHARE_NETWORK), |ui| share_menu(ui, &mut target));
         if let Some(t) = target {
             *action = Some(PlAction::Share(t));
         }
     }
     if st.own {
         ui.separator();
-        if ui.button(format!("{}  Umbenennen", icons::PENCIL_SIMPLE)).clicked() {
+        if ui.button(format!("{}  Rename", icons::PENCIL_SIMPLE)).clicked() {
             *action = Some(PlAction::Rename);
             ui.close_menu();
         }
         if ui
-            .button(RichText::new(format!("{}  Löschen", icons::TRASH)).color(ui::DANGER))
+            .button(RichText::new(format!("{}  Delete", icons::TRASH)).color(ui::DANGER))
             .clicked()
         {
             *action = Some(PlAction::Delete);

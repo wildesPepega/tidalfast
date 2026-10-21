@@ -348,7 +348,7 @@ fn build_activity(now: &Now) -> activity::Activity<'static> {
     }
 
     if !t.url.is_empty() {
-        act = act.buttons(vec![activity::Button::new("Auf TIDAL hören", t.url.clone())]);
+        act = act.buttons(vec![activity::Button::new("Listen on TIDAL", t.url.clone())]);
     }
     act
 }

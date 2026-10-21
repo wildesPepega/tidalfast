@@ -264,7 +264,7 @@ impl Engine {
                     }
                     Err(e) => {
                         log::warn!("playback failed: {e:#}");
-                        let _ = ev.send(AudioEv::Error(format!("Wiedergabe fehlgeschlagen: {e}")));
+                        let _ = ev.send(AudioEv::Error(format!("Playback failed: {e}")));
                     }
                 }
             }
@@ -577,7 +577,7 @@ fn open_device(name: &str) -> Result<MixerDeviceSink> {
         }
         host.default_output_device()
     }
-    .ok_or_else(|| anyhow!("kein Ausgabegerät gefunden"))?;
+    .ok_or_else(|| anyhow!("no output device found"))?;
 
     rodio::DeviceSinkBuilder::from_device(device)
         .context("opening output stream")?
@@ -594,7 +594,7 @@ fn download(url: &str) -> Result<Vec<u8>> {
     let resp = client.get(url).send().context("fetching audio stream")?;
     if !resp.status().is_success() {
         return Err(anyhow!(
-            "Stream-Download fehlgeschlagen ({})",
+            "Stream download failed ({})",
             resp.status()
         ));
     }

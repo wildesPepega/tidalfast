@@ -292,13 +292,13 @@ mod tray {
                 .into()
             };
             vec![
-                entry("Fenster zeigen / verstecken", SysEvent::ToggleWindow),
+                entry("Show / hide window", SysEvent::ToggleWindow),
                 MenuItem::Separator,
-                entry(if self.playing { "Pause" } else { "Wiedergabe" }, SysEvent::Toggle),
-                entry("Nächster Titel", SysEvent::Next),
-                entry("Vorheriger Titel", SysEvent::Previous),
+                entry(if self.playing { "Pause" } else { "Play" }, SysEvent::Toggle),
+                entry("Next track", SysEvent::Next),
+                entry("Previous track", SysEvent::Previous),
                 MenuItem::Separator,
-                entry("Beenden", SysEvent::Quit),
+                entry("Quit", SysEvent::Quit),
             ]
         }
     }
@@ -374,11 +374,11 @@ mod tray {
     impl Tray {
         pub fn start(notifier: Notifier) -> Option<Self> {
             let menu = Menu::new();
-            let show = MenuItem::new("Fenster zeigen / verstecken", true, None);
-            let toggle = MenuItem::new("Wiedergabe", true, None);
-            let next = MenuItem::new("Nächster Titel", true, None);
-            let previous = MenuItem::new("Vorheriger Titel", true, None);
-            let quit = MenuItem::new("Beenden", true, None);
+            let show = MenuItem::new("Show / hide window", true, None);
+            let toggle = MenuItem::new("Play", true, None);
+            let next = MenuItem::new("Next track", true, None);
+            let previous = MenuItem::new("Previous track", true, None);
+            let quit = MenuItem::new("Quit", true, None);
             menu.append_items(&[&show, &PredefinedMenuItem::separator(), &toggle, &next, &previous, &PredefinedMenuItem::separator(), &quit])
                 .ok()?;
 
@@ -415,7 +415,7 @@ mod tray {
         }
 
         pub fn set_playing(&self, playing: bool) {
-            self.toggle.set_text(if playing { "Pause" } else { "Wiedergabe" });
+            self.toggle.set_text(if playing { "Pause" } else { "Play" });
         }
     }
 }

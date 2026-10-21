@@ -293,7 +293,7 @@ impl TidalClient {
     }
 
     pub async fn set_liked(&mut self, track_id: u64, liked: bool) -> Result<()> {
-        let user_id = self.user_id.ok_or_else(|| anyhow!("nicht angemeldet"))?;
+        let user_id = self.user_id.ok_or_else(|| anyhow!("not signed in"))?;
         let cc = self.country_code.clone();
         if liked {
             self.write(
@@ -333,14 +333,14 @@ impl TidalClient {
                 continue;
             }
             if !resp.status().is_success() {
-                return Err(anyhow!("Playlist nicht lesbar ({})", resp.status()));
+                return Err(anyhow!("Could not read playlist ({})", resp.status()));
             }
             return resp
                 .headers()
                 .get("etag")
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string)
-                .ok_or_else(|| anyhow!("keine ETag von TIDAL"));
+                .ok_or_else(|| anyhow!("no ETag from TIDAL"));
         }
     }
 
@@ -372,7 +372,7 @@ impl TidalClient {
 
     /// Create an empty playlist and return its uuid.
     pub async fn create_playlist(&mut self, title: &str) -> Result<String> {
-        let user_id = self.user_id.ok_or_else(|| anyhow!("nicht angemeldet"))?;
+        let user_id = self.user_id.ok_or_else(|| anyhow!("not signed in"))?;
         let cc = self.country_code.clone();
         let body = self
             .write(
@@ -385,7 +385,7 @@ impl TidalClient {
         serde_json::from_str::<Value>(&body)
             .ok()
             .and_then(|v| v.get("uuid").and_then(Value::as_str).map(str::to_string))
-            .ok_or_else(|| anyhow!("TIDAL lieferte keine Playlist-ID"))
+            .ok_or_else(|| anyhow!("TIDAL returned no playlist ID"))
     }
 
     /// Append many tracks to a playlist, in order.
@@ -716,7 +716,7 @@ impl TidalClient {
         let value = self
             .get_value(&format!("{API_URL}/tracks/{id}"), &[("countryCode", &cc)])
             .await?;
-        parse_playlist_item(serde_json::json!({ "item": value })).ok_or_else(|| anyhow!("Titel nicht lesbar"))
+        parse_playlist_item(serde_json::json!({ "item": value })).ok_or_else(|| anyhow!("Could not read track"))
     }
 
     pub async fn album(&mut self, id: u64) -> Result<Album> {
@@ -732,7 +732,7 @@ impl TidalClient {
         let value = self
             .get_value(&format!("{API_URL}/playlists/{uuid}"), &[("countryCode", &cc)])
             .await?;
-        parse_playlist(value).ok_or_else(|| anyhow!("Playlist nicht lesbar"))
+        parse_playlist(value).ok_or_else(|| anyhow!("Could not read playlist"))
     }
 
     /// Similar tracks chosen by TIDAL's algorithm (used for autoplay).
@@ -765,7 +765,7 @@ impl TidalClient {
             }
         }
         if !mixes.is_empty() {
-            sections.push(("Mixe für dich".to_string(), mixes));
+            sections.push(("Mixes for you".to_string(), mixes));
         }
 
         if let Ok(home) = self.get_value(&format!("{API_URL}/pages/home"), &query).await {
@@ -784,11 +784,6 @@ impl TidalClient {
                     }
                 }
                 if !list.is_empty() {
-                    let title = match title {
-                        "The Hits" => "Die Hits",
-                        "From our editors" => "Von der TIDAL-Redaktion",
-                        other => other,
-                    };
                     sections.push((title.to_string(), list));
                 }
             }

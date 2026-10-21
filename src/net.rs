@@ -233,7 +233,7 @@ async fn worker(
             Cmd::AddToPlaylist { uuid, title, track_id } => {
                 match client.add_to_playlist(&uuid, track_id).await {
                     Ok(true) => {
-                        let _ = ev.send(Ev::Info(format!("Zu „{title}“ hinzugefügt")));
+                        let _ = ev.send(Ev::Info(format!("Added to “{title}”")));
                         if let Ok(tracks) = client.collection_tracks(&uuid).await {
                             send_tracks(&ev, uuid, tracks);
                         }
@@ -245,22 +245,22 @@ async fn worker(
                         }
                     }
                     Ok(false) => {
-                        let _ = ev.send(Ev::Info(format!("Bereits in „{title}“ enthalten")));
+                        let _ = ev.send(Ev::Info(format!("Already in “{title}”")));
                     }
                     Err(e) => send_error(&ev, e),
                 }
             }
             Cmd::RenamePlaylist { uuid, title } => {
                 let result = client.rename_playlist(&uuid, &title).await;
-                finish_playlist_edit(&mut client, &ev, result, "Playlist umbenannt").await;
+                finish_playlist_edit(&mut client, &ev, result, "Playlist renamed").await;
             }
             Cmd::DeletePlaylist { uuid } => {
                 let result = client.delete_playlist(&uuid).await;
-                finish_playlist_edit(&mut client, &ev, result, "Playlist gelöscht").await;
+                finish_playlist_edit(&mut client, &ev, result, "Playlist deleted").await;
             }
             Cmd::CreatePlaylist { title } => {
                 let result = client.create_playlist(&title).await.map(|_| ());
-                finish_playlist_edit(&mut client, &ev, result, "Playlist erstellt").await;
+                finish_playlist_edit(&mut client, &ev, result, "Playlist created").await;
             }
             Cmd::LoadHome => load_home(&mut client, &ev).await,
             Cmd::Radio { track_id } => match client.track_radio(track_id).await {
@@ -276,7 +276,7 @@ async fn worker(
                     }
                     Err(e) => send_error(&ev, e),
                 },
-                None => send_error(&ev, anyhow::anyhow!("nicht angemeldet")),
+                None => send_error(&ev, anyhow::anyhow!("not signed in")),
             },
             Cmd::Search(query) => match client.search(&query).await {
                 Ok(results) => {
@@ -312,7 +312,7 @@ async fn worker(
                 .await;
                 match fetched {
                     Ok(embed) if embed.tracks.is_empty() => {
-                        send_error(&ev, anyhow::anyhow!("Die Spotify-Playlist ist leer oder nicht öffentlich"));
+                        send_error(&ev, anyhow::anyhow!("The Spotify playlist is empty or not public"));
                     }
                     Ok(embed) => {
                         let tracks = Arc::new(embed.tracks.clone());
@@ -358,7 +358,7 @@ async fn worker(
                     client.add_tracks(&uuid, &track_ids).await
                 }
                 .await;
-                let message = format!("Playlist „{title}“ mit {count} Titeln erstellt");
+                let message = format!("Playlist “{title}” created with {count} tracks");
                 finish_playlist_edit(&mut client, &ev, result, &message).await;
             }
             Cmd::LoadTrackInfo { track_id } => {
@@ -388,11 +388,11 @@ async fn worker(
                         found
                             .and_then(|u| u.as_str())
                             .map(str::to_string)
-                            .ok_or_else(|| anyhow::anyhow!("dort nicht gefunden"))
+                            .ok_or_else(|| anyhow::anyhow!("not found there"))
                     });
                     let _ = ev.send(match shared {
                         Ok(url) => Ev::Copy(url),
-                        Err(e) => Ev::Error(format!("Teilen fehlgeschlagen: {e}")),
+                        Err(e) => Ev::Error(format!("Sharing failed: {e}")),
                     });
                 });
             }
@@ -419,7 +419,7 @@ async fn linkhop(http: &reqwest::Client, url: &str, share: bool) -> anyhow::Resu
         .send()
         .await?;
     if !resp.status().is_success() {
-        anyhow::bail!("linkhop antwortete mit {}", resp.status());
+        anyhow::bail!("linkhop answered with {}", resp.status());
     }
     Ok(resp.json().await?)
 }
@@ -451,14 +451,14 @@ async fn open_link(client: &mut TidalClient, ev: &Sender<Ev>, link: Link, show: 
         match found {
             Some(l) => l,
             None => {
-                let _ = ev.send(Ev::Error("Dieser Link wurde auf TIDAL nicht gefunden".into()));
+                let _ = ev.send(Ev::Error("This link was not found on TIDAL".into()));
                 return;
             }
         }
     };
     let opened = match (tidal.kind, tidal.id.parse::<u64>()) {
         (Kind::Playlist, _) => client.playlist(&tidal.id).await.map(|p| Opened::Playlist(Box::new(p))),
-        (_, Err(_)) => Err(anyhow::anyhow!("ungültiger Link")),
+        (_, Err(_)) => Err(anyhow::anyhow!("invalid link")),
         (Kind::Track, Ok(id)) => client.track(id).await.map(|t| Opened::Track(Box::new(t))),
         (Kind::Album, Ok(id)) => client.album(id).await.map(|a| Opened::Album(Box::new(a))),
         (Kind::Artist, Ok(id)) => client.artist_info(id).await.map(|a| Opened::Artist(Box::new(a))),
@@ -474,7 +474,7 @@ async fn open_link(client: &mut TidalClient, ev: &Sender<Ev>, link: Link, show: 
 async fn linkhop_get(http: &reqwest::Client, url: &str) -> anyhow::Result<serde_json::Value> {
     let resp = http.get(url).timeout(Duration::from_secs(30)).send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("linkhop antwortete mit {}", resp.status());
+        anyhow::bail!("linkhop answered with {}", resp.status());
     }
     Ok(resp.json().await?)
 }
@@ -544,7 +544,7 @@ async fn login(client: &mut TidalClient, ev: &Sender<Ev>) {
     loop {
         if Instant::now() > deadline {
             let _ = ev.send(Ev::Error(
-                "Anmeldung abgelaufen — bitte erneut versuchen".into(),
+                "Sign-in expired — please try again".into(),
             ));
             return;
         }

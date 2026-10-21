@@ -20,21 +20,21 @@ pub fn embed_url(playlist_id: &str) -> String {
 pub fn parse_embed(html: &str) -> Result<Embed> {
     let marker = html
         .find("id=\"__NEXT_DATA__\"")
-        .ok_or_else(|| anyhow!("Spotify-Playlist nicht lesbar (ist sie öffentlich?)"))?;
+        .ok_or_else(|| anyhow!("Could not read the Spotify playlist (is it public?)"))?;
     let rest = &html[marker..];
-    let from = rest.find('>').ok_or_else(|| anyhow!("Spotify-Seite unerwartet"))? + 1;
+    let from = rest.find('>').ok_or_else(|| anyhow!("Unexpected Spotify page"))? + 1;
     let len = rest[from..]
         .find("</script>")
-        .ok_or_else(|| anyhow!("Spotify-Seite unerwartet"))?;
+        .ok_or_else(|| anyhow!("Unexpected Spotify page"))?;
     let data: Value = serde_json::from_str(&rest[from..from + len])?;
     let entity = data
         .pointer("/props/pageProps/state/data/entity")
-        .ok_or_else(|| anyhow!("Spotify-Playlist nicht lesbar (ist sie öffentlich?)"))?;
+        .ok_or_else(|| anyhow!("Could not read the Spotify playlist (is it public?)"))?;
 
     let name = ["name", "title"]
         .iter()
         .find_map(|k| entity.get(*k).and_then(Value::as_str))
-        .unwrap_or("Spotify-Import")
+        .unwrap_or("Spotify import")
         .to_string();
     let cover = entity
         .pointer("/coverArt/sources")

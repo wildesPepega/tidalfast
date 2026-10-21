@@ -23,6 +23,12 @@ pub struct Settings {
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub discord: bool,
+    /// Media keys and the desktop's media controls (MPRIS / Windows SMTC).
+    pub media_keys: bool,
+    /// Tray icon.
+    pub tray: bool,
+    /// Closing the window keeps tidalfast running in the tray.
+    pub close_to_tray: bool,
     /// How one track leads into the next.
     pub transition: TransitionMode,
     /// Crossfade length in seconds.
@@ -59,6 +65,9 @@ impl Default for Settings {
             shuffle: false,
             repeat: RepeatMode::Off,
             discord: true,
+            media_keys: true,
+            tray: false,
+            close_to_tray: false,
             transition: TransitionMode::Off,
             crossfade_secs: 6.0,
             eq: EqSettings::default(),

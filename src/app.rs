@@ -10,6 +10,7 @@ use eframe::egui::{self, Color32, RichText, TextureHandle};
 
 use crate::audio::{Audio, AudioCmd, AudioEv, OutputDevice};
 use crate::config::{RepeatMode, Settings};
+use crate::system::{NowPlaying, SysEvent, System};
 use crate::transition::TransitionMode;
 use crate::discord::{Discord, DiscordCmd};
 use crate::eq::EqShared;
@@ -83,6 +84,7 @@ enum SettingsTab {
     Playback,
     Equalizer,
     Discord,
+    System,
     Account,
 }
 
@@ -207,6 +209,16 @@ pub struct App {
     unmuted_volume: f32,
     /// The upcoming track handed to the audio engine: (queue index, shuffle position, track id).
     preload: Option<(usize, Option<usize>, u64)>,
+    /// Media keys / tray integration.
+    system: System,
+    /// The window is hidden (in the tray).
+    window_hidden: bool,
+    /// Quit for real, even with "close to tray".
+    quitting: bool,
+    /// What the desktop's media controls were last told: (track id, playing).
+    sys_sent: Option<(Option<u64>, bool)>,
+    /// The playback position jumped; tell the desktop again.
+    sys_dirty: bool,
     now_open: bool,
     now_tab: NowTab,
     info_for: Option<u64>,
@@ -340,6 +352,11 @@ impl App {
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
+            system: System::new(cc),
+            window_hidden: false,
+            quitting: false,
+            sys_sent: None,
+            sys_dirty: false,
             profile_menu_open: false,
             picture_url,
             liked_count: None,
@@ -366,6 +383,8 @@ impl App {
         if app.cfg.volume > 0.0 {
             app.unmuted_volume = app.cfg.volume;
         }
+        app.system.set_media(app.cfg.media_keys);
+        app.system.set_tray(app.cfg.tray);
         if logged_in {
             // Show the last known account data immediately; fresh data replaces it.
             if let Some(list) = crate::cache::read::<Vec<Playlist>>("playlists") {
@@ -1043,6 +1062,7 @@ impl App {
 
     fn seek(&mut self, pos: f64) {
         self.position = pos;
+        self.sys_dirty = true;
         self.audio.send(AudioCmd::Seek(pos));
         self.discord.send(DiscordCmd::Seek { position: pos });
     }
@@ -1195,8 +1215,8 @@ impl App {
     /// Open a Spotify or TIDAL link (pasted, passed on the command line or
     /// handed over by a second instance).
     fn open_external(&mut self, text: &str) {
-        self.egui_ctx
-            .send_viewport_cmd(egui::ViewportCommand::Focus);
+        let ctx = self.egui_ctx.clone();
+        self.show_window(&ctx);
         let Some(link) = link::parse(text) else { return };
         if link.service == link::Service::Spotify && link.kind == link::Kind::Playlist {
             self.start_import(link.id);
@@ -1331,6 +1351,82 @@ impl App {
     fn toast(&mut self, message: String) {
         log::info!("{message}");
         self.toast = Some((message, Instant::now()));
+    }
+
+    /// Media keys, tray and close-to-tray.
+    fn handle_system(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quitting
+            && self.cfg.close_to_tray
+            && self.system.tray_active()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_window(ctx);
+        }
+
+        for event in self.system.poll() {
+            match event {
+                SysEvent::Play if !self.playing => self.toggle_play(),
+                SysEvent::Pause | SysEvent::Stop if self.playing => self.toggle_play(),
+                SysEvent::Play | SysEvent::Pause | SysEvent::Stop => {}
+                SysEvent::Toggle => self.toggle_play(),
+                SysEvent::Next => self.advance(false),
+                SysEvent::Previous => self.previous(),
+                SysEvent::SeekBy(secs) => self.seek_by(secs),
+                SysEvent::SeekTo(pos) => {
+                    if self.current.is_some() && !self.finished && self.duration > 0.0 {
+                        self.seek(pos.clamp(0.0, (self.duration - 0.5).max(0.0)));
+                    }
+                }
+                SysEvent::Show => self.show_window(ctx),
+                SysEvent::ToggleWindow => {
+                    if self.window_hidden || !ctx.input(|i| i.viewport().focused.unwrap_or(true)) {
+                        self.show_window(ctx);
+                    } else {
+                        self.hide_window(ctx);
+                    }
+                }
+                SysEvent::Quit => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+
+        // keep the desktop's media widgets in step with what plays
+        let id = self.current.as_ref().map(|t| t.id);
+        let playing = self.playing && !self.finished;
+        if self.sys_sent != Some((id, playing)) || self.sys_dirty {
+            if self.sys_sent.map(|(sent, _)| sent) != Some(id) {
+                let now = self.current.as_ref().map(|t| NowPlaying {
+                    title: t.title.clone(),
+                    artist: t.artist_name(),
+                    album: t.album_title(),
+                    cover_url: t.cover_url(COVER_NOW).unwrap_or_default(),
+                    duration: t.duration as f64,
+                });
+                self.system.set_track(now);
+            }
+            self.system.set_playback(playing, self.position);
+            self.sys_sent = Some((id, playing));
+            self.sys_dirty = false;
+        }
+    }
+
+    fn show_window(&mut self, ctx: &egui::Context) {
+        self.window_hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        self.window_hidden = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        // Wayland can't hide a window, only minimise it
+        if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
     }
 
     fn touch(&mut self) {
@@ -3181,6 +3277,7 @@ impl App {
                                         (SettingsTab::Playback, icons::PLAY_CIRCLE, "Wiedergabe"),
                                         (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer"),
                                         (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord"),
+                                        (SettingsTab::System, icons::DESKTOP, "System"),
                                         (SettingsTab::Account, icons::USER_CIRCLE, "Konto"),
                                     ] {
                                         if nav_item(ui, icon, label, self.settings_tab == tab, None).clicked() {
@@ -3336,6 +3433,58 @@ impl App {
                     });
                 }
             }
+            SettingsTab::System => {
+                ui.heading("System");
+                ui.add_space(8.0);
+
+                let mut media = self.cfg.media_keys;
+                if ui.checkbox(&mut media, "Medientasten und Mediensteuerung").changed() {
+                    self.cfg.media_keys = media;
+                    self.system.set_media(media);
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new(
+                        "Steuert tidalfast über die Medientasten und zeigt den Titel in den Medien-Widgets des \
+                         Desktops (KDE, GNOME, Waybar, playerctl …) bzw. im Windows-Medien-Overlay.",
+                    )
+                    .color(TEXT_DIM),
+                );
+
+                ui.add_space(14.0);
+                let mut tray = self.cfg.tray;
+                if ui.checkbox(&mut tray, "Tray-Icon anzeigen").changed() {
+                    self.cfg.tray = tray;
+                    self.system.set_tray(tray);
+                    if !tray && self.window_hidden {
+                        let ctx = ui.ctx().clone();
+                        self.show_window(&ctx);
+                    }
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new(
+                        "Linksklick zeigt oder versteckt das Fenster, Rechtsklick öffnet das Menü. Unter Linux \
+                         funktioniert das mit KDE, Waybar, XFCE und anderen Leisten mit StatusNotifier-Unterstützung; \
+                         GNOME braucht die Erweiterung „AppIndicator and KStatusNotifierItem Support“.",
+                    )
+                    .color(TEXT_DIM),
+                );
+
+                ui.add_space(14.0);
+                let mut close_to_tray = self.cfg.close_to_tray;
+                if ui
+                    .add_enabled(self.cfg.tray, egui::Checkbox::new(&mut close_to_tray, "Beim Schließen im Tray weiterlaufen"))
+                    .changed()
+                {
+                    self.cfg.close_to_tray = close_to_tray;
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new("Das Schließen des Fensters versteckt tidalfast nur; die Musik läuft weiter. „Beenden“ im Tray-Menü beendet die App.")
+                        .color(TEXT_DIM),
+                );
+            }
             SettingsTab::Account => {
                 ui.heading("Konto");
                 ui.add_space(8.0);
@@ -3484,6 +3633,7 @@ impl eframe::App for App {
         self.sync_budget = 24;
         self.handle_net_events(ctx);
         self.handle_audio_events();
+        self.handle_system(ctx);
         self.refresh_preload();
         while let Ok(text) = self.link_rx.try_recv() {
             self.open_external(&text);

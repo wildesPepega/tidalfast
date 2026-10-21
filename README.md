@@ -18,6 +18,8 @@ No Electron, no web view, just a small binary.</p>
 - **Spotify playlist import:** paste a public Spotify playlist link, tidalfast matches the songs on TIDAL and creates a TIDAL playlist from them.
 - **Link handler:** `tidal:` and `spotify:` links (for example clicked in Discord) open in the app.
 - **Discord Rich Presence:** shows what you listen to, with cover, progress and an "Listen on TIDAL" button. Updates are debounced, rate-limit friendly and survive Discord restarts.
+- **Media keys and desktop media controls:** play/pause/next/previous/seek from your keyboard and from the media widgets of your desktop (MPRIS on Linux: KDE, GNOME, Waybar's `mpris` module, `playerctl`; System Media Transport Controls on Windows). Shows title, artist and cover.
+- **Tray icon:** StatusNotifierItem on Linux (KDE, Waybar, XFCE, … and GNOME with the AppIndicator extension), notification-area icon on Windows. Left click shows/hides the window, the menu has play/pause, next, previous and quit. Optionally keeps running in the tray when you close the window. Media keys and tray are configured in *Settings → System*.
 - **Output device selection** (PipeWire/PulseAudio sinks on Linux, WASAPI devices on Windows).
 - **Single instance:** starting tidalfast again focuses the running window.
 - Keyboard shortcuts: `Space` play/pause, `Ctrl+→/←` next/previous, `→/←` seek ±10 s, `↑/↓` volume, `M` mute, `Ctrl+F` or `/` search.
@@ -73,6 +75,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 | `src/eq.rs` | Equalizer and spectrum analysis |
 | `src/discord.rs` | Discord Rich Presence worker |
 | `src/import.rs`, `src/link.rs` | Spotify import and Spotify/TIDAL link parsing |
+| `src/system.rs` | Media keys / MPRIS / Windows media controls and the tray icon |
 | `src/ipc.rs`, `src/desktop.rs` | Single instance and Linux desktop integration |
 | `src/config.rs`, `src/cache.rs`, `src/model.rs` | Settings, on-disk cache and data types |
 | `install.sh` | Linux installer used by the curl command |
@@ -80,7 +83,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 ## Credits
 
 - **[SONE](https://github.com/lullabyX/sone) by lullabyX**: tidalfast builds on the work of this TIDAL desktop application. The TIDAL login flow (device authorization and the client configuration) and the way streams are resolved so that music playback works are taken from SONE. Thank you!
-- [egui / eframe](https://github.com/emilk/egui), [rodio](https://github.com/RustAudio/rodio), [cpal](https://github.com/RustAudio/cpal), [discord-rich-presence](https://crates.io/crates/discord-rich-presence), [Phosphor icons](https://phosphoricons.com/) and [reqwest](https://github.com/seanmonstar/reqwest).
+- [egui / eframe](https://github.com/emilk/egui), [rodio](https://github.com/RustAudio/rodio), [cpal](https://github.com/RustAudio/cpal), [discord-rich-presence](https://crates.io/crates/discord-rich-presence), [souvlaki](https://github.com/Sinono3/souvlaki), [ksni](https://github.com/iovxw/ksni), [tray-icon](https://github.com/tauri-apps/tray-icon), [Phosphor icons](https://phosphoricons.com/) and [reqwest](https://github.com/seanmonstar/reqwest).
 - The TIDAL name and logo belong to TIDAL.
 
 ## License

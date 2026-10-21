@@ -2520,12 +2520,21 @@ impl App {
                                         self.cover_pick = Some(rx);
                                         let ctx = ui.ctx().clone();
                                         std::thread::spawn(move || {
-                                            let picked = rfd::FileDialog::new()
-                                                .add_filter("Images (PNG, JPEG)", &["png", "jpg", "jpeg"])
-                                                .set_title("Choose a playlist cover")
-                                                .pick_file();
-                                            if let Some(path) = picked {
-                                                let _ = tx.send(path);
+                                            // the Linux portal dialog needs a Tokio runtime
+                                            let picked = tokio::runtime::Builder::new_current_thread()
+                                                .enable_all()
+                                                .build()
+                                                .ok()
+                                                .and_then(|rt| {
+                                                    rt.block_on(
+                                                        rfd::AsyncFileDialog::new()
+                                                            .add_filter("Images (PNG, JPEG)", &["png", "jpg", "jpeg"])
+                                                            .set_title("Choose a playlist cover")
+                                                            .pick_file(),
+                                                    )
+                                                });
+                                            if let Some(file) = picked {
+                                                let _ = tx.send(file.path().to_path_buf());
                                             }
                                             ctx.request_repaint();
                                         });

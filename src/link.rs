@@ -38,6 +38,9 @@ pub enum Service {
     /// A linkhop share page (`linkhop.paul.wtf/c/<id>`); `id` is the short id.
     /// For YouTube and linkhop links `kind` is a placeholder until resolved.
     Linkhop,
+    /// A Spotify short link (`spotify.link/…`); `id` is the whole URL, to be
+    /// resolved by following its redirect.
+    SpotifyShort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +58,7 @@ impl Link {
             Service::Tidal => format!("https://tidal.com/{}/{}", self.kind.word(), self.id),
             Service::YouTube => format!("https://music.youtube.com/watch?v={}", self.id),
             Service::Linkhop => format!("https://linkhop.paul.wtf/c/{}", self.id),
+            Service::SpotifyShort => self.id.clone(),
         }
     }
 }
@@ -62,6 +66,13 @@ impl Link {
 /// Parse a pasted URL, a `spotify:track:<id>` URI or a `spotify://track/<id>` URL.
 pub fn parse(input: &str) -> Option<Link> {
     let input = input.trim();
+    // pasted text may carry more than the link ("Listen to … https://…")
+    if input.contains(char::is_whitespace) {
+        return input
+            .split_whitespace()
+            .map(|word| word.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | '(' | ')' | ',')))
+            .find_map(|word| (!word.contains(char::is_whitespace)).then(|| parse(word)).flatten());
+    }
     if let Some(rest) = input.strip_prefix("spotify:") {
         let rest = rest.trim_start_matches("//");
         let mut parts = rest.split(|c| c == ':' || c == '/');
@@ -92,6 +103,9 @@ pub fn parse(input: &str) -> Option<Link> {
                 segs.drain(..2);
             }
             spotify(segs.first()?, segs.get(1)?)
+        }
+        "spotify.link" | "spotify.app.link" => {
+            (!segs.is_empty()).then(|| Link { service: Service::SpotifyShort, kind: Kind::Track, id: format!("https://{host}/{}", segs.join("/")) })
         }
         "youtu.be" => video(segs.first()?),
         "youtube.com" | "m.youtube.com" | "music.youtube.com" => {
@@ -183,6 +197,17 @@ mod tests {
         assert_eq!((l.service, l.id.as_str()), (Service::Linkhop, "7uCdPq"));
         assert!(parse("https://www.youtube.com/").is_none());
         assert!(parse("https://linkhop.paul.wtf/").is_none());
+    }
+
+    #[test]
+    fn links_inside_text_and_short_links() {
+        let l = parse("Listen to this: https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=x, it's great").unwrap();
+        assert_eq!((l.service, l.kind), (Service::Spotify, Kind::Track));
+        let l = parse("https://spotify.link/AbC123xyz?si=1").unwrap();
+        assert_eq!(l.service, Service::SpotifyShort);
+        assert_eq!(l.url(), "https://spotify.link/AbC123xyz");
+        assert!(parse("https://open.spotify.com/intl-pt/embed/playlist/37i9dQZF1DXcBWIGoYBM5M").is_some());
+        assert!(parse("just some words").is_none());
     }
 
     #[test]

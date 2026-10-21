@@ -16,6 +16,7 @@ No Electron, no web view, just a small binary.</p>
 - **10-band equalizer** with a live spectrum/meter display.
 - **Lyrics and credits** for the playing track.
 - **Spotify playlist import:** paste a public Spotify playlist link, tidalfast matches the songs on TIDAL and creates a TIDAL playlist from them.
+- **Robust Spotify links:** track, album, artist and playlist links (also `spotify.link` short links and links inside pasted text) are converted via linkhop; if linkhop is down or doesn't know a link, tidalfast reads the Spotify page itself and matches it on TIDAL. Requests are retried automatically.
 - **Link handler:** `tidal:` and `spotify:` links (for example clicked in Discord) open in the app.
 - **Discord Rich Presence:** shows what you listen to, with cover, progress and an "Listen on TIDAL" button. Updates are debounced, rate-limit friendly and survive Discord restarts.
 - **Media keys and desktop media controls:** play/pause/next/previous/seek from your keyboard and from the media widgets of your desktop (MPRIS on Linux: KDE, GNOME, Waybar's `mpris` module, `playerctl`; System Media Transport Controls on Windows). Shows title, artist and cover.

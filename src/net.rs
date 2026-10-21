@@ -9,7 +9,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self as tmpsc, UnboundedReceiver, UnboundedSender};
 
 use crate::link::{self, Kind, Link, Service};
-use crate::model::{ImportTrack, Album, ArtistPage, CreditGroup, Lyrics, Playlist, SearchResults, StreamInfo, Track};
+use crate::model::{Album, ImportTrack, ArtistPage, CreditGroup, Lyrics, Playlist, SearchResults, StreamInfo, Track};
 use crate::tidal::{Poll, TidalClient, Tokens};
 
 pub enum Cmd {
@@ -161,6 +161,8 @@ pub enum Ev {
     /// Text for the clipboard.
     Copy(String),
     Open(Opened, bool),
+    /// A link (e.g. a short link) turned out to be a Spotify playlist: import it.
+    SpotifyPlaylist(String),
     Error(String),
 }
 
@@ -297,19 +299,7 @@ async fn worker(
             Cmd::LoadArtist { id } => load_artist(&mut client, &ev, id).await,
             Cmd::ImportSpotify { id, job } => {
                 import_job = job;
-                let fetched = async {
-                    let html = client
-                        .http()
-                        .get(crate::import::embed_url(&id))
-                        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
-                        .timeout(Duration::from_secs(30))
-                        .send()
-                        .await?
-                        .text()
-                        .await?;
-                    crate::import::parse_embed(&html)
-                }
-                .await;
+                let fetched = crate::import::fetch_embed(&client.http(), "playlist", &id).await;
                 match fetched {
                     Ok(embed) if embed.tracks.is_empty() => {
                         send_error(&ev, anyhow::anyhow!("The Spotify playlist is empty or not public"));
@@ -333,15 +323,7 @@ async fn worker(
                     continue;
                 }
                 let src = &tracks[index];
-                let first_artist = src.artists.split(", ").next().unwrap_or("");
-                let found = match client.search(&format!("{} {}", src.title, first_artist)).await {
-                    Ok(results) => crate::import::best_match(src, &results.tracks)
-                        .map(|(i, sure)| (results.tracks[i].clone(), sure)),
-                    Err(e) => {
-                        log::warn!("import search failed: {e:#}");
-                        None
-                    }
-                };
+                let found = find_on_tidal(&mut client, src).await;
                 let sure = found.as_ref().is_some_and(|f| f.1);
                 let _ = ev.send(Ev::ImportMatch {
                     job,
@@ -424,7 +406,69 @@ async fn linkhop(http: &reqwest::Client, url: &str, share: bool) -> anyhow::Resu
     Ok(resp.json().await?)
 }
 
+/// Find the TIDAL track for a Spotify track: the most specific search first,
+/// then looser ones, and a network hiccup gets one more try.
+async fn find_on_tidal(client: &mut TidalClient, src: &ImportTrack) -> Option<(Track, bool)> {
+    let mut best: Option<(Track, bool)> = None;
+    for query in crate::import::search_queries(src) {
+        let mut results = client.search(&query).await;
+        if results.is_err() {
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            results = client.search(&query).await;
+        }
+        let results = match results {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("import search failed: {e:#}");
+                continue;
+            }
+        };
+        if let Some((i, sure)) = crate::import::best_match(src, &results.tracks) {
+            let found = (results.tracks[i].clone(), sure);
+            if sure {
+                return Some(found);
+            }
+            best.get_or_insert(found);
+        }
+    }
+    best
+}
+
+/// Follow a short link (`spotify.link/…`) to the page it points at.
+async fn resolve_short(http: &reqwest::Client, url: &str) -> anyhow::Result<Link> {
+    let resp = http
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await?;
+    if let Some(link) = link::parse(resp.url().as_str()) {
+        if link.service != Service::SpotifyShort {
+            return Ok(link);
+        }
+    }
+    // some short links answer with a page that names the target
+    let body = resp.text().await.unwrap_or_default();
+    body.split(|c: char| c == '"' || c == '\'' || c == '<' || c == '>' || c.is_whitespace())
+        .filter(|w| w.contains("open.spotify.com/") || w.starts_with("spotify:"))
+        .map(|w| w.replace("\\u002F", "/").replace("&amp;", "&"))
+        .find_map(|w| link::parse(&w))
+        .ok_or_else(|| anyhow::anyhow!("The short link leads nowhere"))
+}
+
 async fn open_link(client: &mut TidalClient, ev: &Sender<Ev>, link: Link, show: bool) {
+    let link = if link.service == Service::SpotifyShort {
+        match resolve_short(&client.http(), &link.id).await {
+            Ok(l) => l,
+            Err(e) => return send_error(ev, e),
+        }
+    } else {
+        link
+    };
+    if link.service == Service::Spotify && link.kind == Kind::Playlist {
+        let _ = ev.send(Ev::SpotifyPlaylist(link.id));
+        return;
+    }
     let tidal = if link.service == Service::Tidal {
         link
     } else {
@@ -451,6 +495,16 @@ async fn open_link(client: &mut TidalClient, ev: &Sender<Ev>, link: Link, show: 
         match found {
             Some(l) => l,
             None => {
+                // linkhop is down or doesn't know it: match it on TIDAL ourselves
+                if link.service == Service::Spotify {
+                    match spotify_fallback(client, &link).await {
+                        Ok(opened) => {
+                            let _ = ev.send(Ev::Open(opened, show));
+                            return;
+                        }
+                        Err(e) => log::warn!("spotify fallback failed: {e:#}"),
+                    }
+                }
                 let _ = ev.send(Ev::Error("This link was not found on TIDAL".into()));
                 return;
             }
@@ -471,12 +525,63 @@ async fn open_link(client: &mut TidalClient, ev: &Sender<Ev>, link: Link, show: 
     }
 }
 
-async fn linkhop_get(http: &reqwest::Client, url: &str) -> anyhow::Result<serde_json::Value> {
-    let resp = http.get(url).timeout(Duration::from_secs(30)).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("linkhop answered with {}", resp.status());
+/// Read a Spotify track, album or artist from its embed page and look it up
+/// on TIDAL by name.
+async fn spotify_fallback(client: &mut TidalClient, link: &Link) -> anyhow::Result<Opened> {
+    let embed = crate::import::fetch_embed(&client.http(), link.kind.word(), &link.id).await?;
+    match link.kind {
+        Kind::Track => {
+            let src = embed.tracks.first().ok_or_else(|| anyhow::anyhow!("empty track page"))?;
+            let (track, _) = find_on_tidal(client, src).await.ok_or_else(|| anyhow::anyhow!("no match"))?;
+            Ok(Opened::Track(Box::new(track)))
+        }
+        Kind::Album => {
+            let results = client.search(&format!("{} {}", embed.name, embed.subtitle)).await?;
+            let i = crate::import::best_album(&embed.name, &embed.subtitle, &results.albums)
+                .ok_or_else(|| anyhow::anyhow!("no match"))?;
+            let album = client.album(results.albums[i].id).await?;
+            Ok(Opened::Album(Box::new(album)))
+        }
+        Kind::Artist => {
+            let results = client.search(&embed.name).await?;
+            let i = crate::import::best_artist(&embed.name, &results.artists).ok_or_else(|| anyhow::anyhow!("no match"))?;
+            let artist = client.artist_info(results.artists[i].id).await?;
+            Ok(Opened::Artist(Box::new(artist)))
+        }
+        Kind::Playlist => Err(anyhow::anyhow!("playlists are imported, not opened")),
     }
-    Ok(resp.json().await?)
+}
+
+/// GET a linkhop answer; network errors, 429 and 5xx are retried.
+async fn linkhop_get(http: &reqwest::Client, url: &str) -> anyhow::Result<serde_json::Value> {
+    let mut last = anyhow::anyhow!("linkhop unreachable");
+    for attempt in 0..3u64 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(600 * attempt)).await;
+        }
+        let resp = match http.get(url).timeout(Duration::from_secs(20)).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last = e.into();
+                continue;
+            }
+        };
+        let status = resp.status();
+        if status.is_success() {
+            match resp.json().await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    last = e.into();
+                    continue;
+                }
+            }
+        }
+        last = anyhow::anyhow!("linkhop answered with {status}");
+        if !(status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS) {
+            break;
+        }
+    }
+    Err(last)
 }
 
 fn urlencode(text: &str) -> String {

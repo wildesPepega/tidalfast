@@ -623,6 +623,7 @@ impl App {
                     self.search_loading = false;
                     self.view = View::Search;
                 }
+                Ev::SpotifyPlaylist(id) => self.start_import(id),
                 Ev::Open(opened, false) => match opened {
                     Opened::Track(track) => self.play_single(*track),
                     Opened::Album(album) => self.open_playlist_from(album.as_playlist()),

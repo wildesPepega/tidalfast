@@ -111,6 +111,32 @@ pub struct Album {
     /// "ALBUM", "EP" or "SINGLE".
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
+    #[serde(default)]
+    pub explicit: Option<bool>,
+}
+
+/// TIDAL lists one release several times (clean and explicit versions,
+/// re-registrations under new ids). Keep one per title and type: preferably
+/// the explicit one with the most tracks, otherwise the original (lowest id).
+pub fn dedupe_albums(albums: Vec<Album>) -> Vec<Album> {
+    let key = |a: &Album| {
+        let title = a.title.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+        (title, a.kind.clone().unwrap_or_default())
+    };
+    let rank = |a: &Album| (a.explicit.unwrap_or(false), a.number_of_tracks.unwrap_or(0), std::cmp::Reverse(a.id));
+    let mut best: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for (i, album) in albums.iter().enumerate() {
+        best.entry(key(album))
+            .and_modify(|j| {
+                if rank(album) > rank(&albums[*j]) {
+                    *j = i;
+                }
+            })
+            .or_insert(i);
+    }
+    // keep the original order
+    let keep: std::collections::HashSet<usize> = best.into_values().collect();
+    albums.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, a)| a).collect()
 }
 
 impl Album {
@@ -295,4 +321,39 @@ pub fn format_duration(secs: f64) -> String {
     let m = total / 60;
     let s = total % 60;
     format!("{m}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album(id: u64, title: &str, kind: &str, tracks: u32, explicit: bool) -> Album {
+        Album {
+            id,
+            title: title.into(),
+            kind: Some(kind.into()),
+            number_of_tracks: Some(tracks),
+            explicit: Some(explicit),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn duplicate_releases_collapse_to_one() {
+        let list = vec![
+            album(3, "Meteora", "ALBUM", 13, false),
+            album(1, "Meteora", "ALBUM", 13, false),
+            album(7, "Kamikaze", "ALBUM", 13, false),
+            album(5, "Kamikaze", "ALBUM", 13, true),
+            album(9, "Kamikaze ", "ALBUM", 13, true),
+            album(8, "Houdini", "SINGLE", 1, true),
+            album(2, "Houdini", "ALBUM", 12, true),
+            album(4, "Waiting for the End", "SINGLE", 2, false),
+            album(6, "waiting for the end", "SINGLE", 3, false),
+        ];
+        let ids: Vec<u64> = dedupe_albums(list).iter().map(|a| a.id).collect();
+        // lowest id wins ties, explicit and longer versions win otherwise;
+        // a single and an album of the same name stay apart
+        assert_eq!(ids, vec![1, 5, 8, 2, 6]);
+    }
 }

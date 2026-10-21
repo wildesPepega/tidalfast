@@ -764,24 +764,30 @@ impl TidalClient {
 
     /// An artist's releases; `filter` is `ALBUMS`, `EPSANDSINGLES` or `COMPILATIONS`.
     /// Newest first.
+    /// All releases of an artist for one filter, each release once. TIDAL
+    /// hands them out in pages of 100 and lists many releases several times.
     pub async fn artist_albums(&mut self, id: u64, filter: &str) -> Result<Vec<Album>> {
         let cc = self.country_code.clone();
-        let value = self
-            .get_value(
-                &format!("{API_URL}/artists/{id}/albums"),
-                &[("countryCode", &cc), ("filter", filter), ("limit", "100")],
-            )
-            .await?;
-        let mut albums: Vec<Album> = value
-            .get("items")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut albums: Vec<Album> = Vec::new();
+        // (the compilation list of a big artist runs into the thousands: first page only)
+        let pages = if filter == "COMPILATIONS" { 1 } else { 6 };
+        for page in 0..pages {
+            let offset = (page * 100).to_string();
+            let value = self
+                .get_value(
+                    &format!("{API_URL}/artists/{id}/albums"),
+                    &[("countryCode", &cc), ("filter", filter), ("limit", "100"), ("offset", &offset)],
+                )
+                .await?;
+            let items = value.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+            let count = items.len();
+            albums.extend(items.into_iter().filter_map(|v| serde_json::from_value(v).ok()));
+            let total = value.get("totalNumberOfItems").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if count < 100 || (page + 1) * 100 >= total {
+                break;
+            }
+        }
+        let mut albums = crate::model::dedupe_albums(albums);
         albums.sort_by(|a, b| b.release_date.cmp(&a.release_date));
         Ok(albums)
     }
@@ -1262,6 +1268,68 @@ mod live {
             c.delete_playlist(&uuid).await.unwrap();
             println!("deleted {uuid}");
             result.unwrap();
+        });
+    }
+
+    /// Which artist pages show the same release more than once?
+    /// `cargo test live_artist_dupes -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_artist_dupes() {
+        let cfg = crate::config::Settings::load();
+        let tokens = Tokens {
+            access_token: cfg.access_token.clone(),
+            refresh_token: cfg.refresh_token.clone(),
+            user_id: cfg.user_id,
+            ..Default::default()
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let mut c = TidalClient::new(cfg.country_code.clone()).unwrap();
+            c.set_tokens(&tokens);
+            for name in ["Linkin Park", "Eminem", "Taylor Swift"] {
+                let found = c.search(name).await.unwrap();
+                let artist = &found.artists[0];
+                println!("== {} ({})", artist.name, artist.id);
+                for filter in ["ALBUMS", "EPSANDSINGLES", "COMPILATIONS"] {
+                    let cc = c.country_code.clone();
+                    let v = c
+                        .get_value(
+                            &format!("{API_URL}/artists/{}/albums", artist.id),
+                            &[("countryCode", &cc), ("filter", filter), ("limit", "100")],
+                        )
+                        .await
+                        .unwrap();
+                    let items = v.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+                    println!("-- {filter}: {} items (totalNumberOfItems {:?})", items.len(), v.get("totalNumberOfItems"));
+                    let mut seen: std::collections::HashMap<String, Vec<String>> = Default::default();
+                    for a in &items {
+                        let title = a.get("title").and_then(Value::as_str).unwrap_or("").to_lowercase();
+                        seen.entry(title).or_default().push(format!(
+                            "id={} type={} tracks={} explicit={} q={} date={}",
+                            a.get("id").unwrap_or(&Value::Null),
+                            a.get("type").unwrap_or(&Value::Null),
+                            a.get("numberOfTracks").unwrap_or(&Value::Null),
+                            a.get("explicit").unwrap_or(&Value::Null),
+                            a.get("audioQuality").unwrap_or(&Value::Null),
+                            a.get("releaseDate").unwrap_or(&Value::Null),
+                        ));
+                    }
+                    for (title, list) in seen.iter().filter(|(_, l)| l.len() > 1).take(2) {
+                        println!("   DUP {title}: {} entries", list.len());
+                    }
+                    let deduped = c.artist_albums(artist.id, filter).await.unwrap();
+                    let mut titles: Vec<(String, String)> = deduped
+                        .iter()
+                        .map(|a| (a.title.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" "), a.kind.clone().unwrap_or_default()))
+                        .collect();
+                    let before = titles.len();
+                    titles.sort();
+                    titles.dedup();
+                    println!("   after dedupe: {} items for {} raw, {} distinct titles", before, items.len(), titles.len());
+                    assert_eq!(before, titles.len());
+                }
+            }
         });
     }
 }

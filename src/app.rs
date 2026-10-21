@@ -127,6 +127,10 @@ enum Dialog {
         description: String,
         /// Image chosen for the new cover.
         cover: Option<std::path::PathBuf>,
+        /// The playlist's current cover, to show.
+        current: Option<String>,
+        /// Go back to the generated cover.
+        remove: bool,
     },
     Delete { uuid: String, title: String },
     Create { text: String },
@@ -2444,11 +2448,14 @@ impl App {
             PlAction::Play => self.play_collection(&pl),
             PlAction::Edit => {
                 self.cover_preview = None;
+                let current = pl.cover_url();
                 self.dialog = Some(Dialog::Edit {
                     uuid: pl.uuid,
-                    title: pl.title,
-                    description: pl.description.unwrap_or_default(),
+                    title: pl.title.clone(),
+                    description: pl.description.clone().unwrap_or_default(),
                     cover: None,
+                    current,
+                    remove: false,
                 });
             }
             PlAction::Delete => {
@@ -2461,7 +2468,8 @@ impl App {
         // an image picked in the file dialog
         if let Some(path) = self.cover_pick.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.cover_pick = None;
-            if let Some(Dialog::Edit { cover, .. }) = &mut self.dialog {
+            if let Some(Dialog::Edit { cover, remove, .. }) = &mut self.dialog {
+                *remove = false;
                 self.cover_preview = std::fs::read(&path)
                     .ok()
                     .and_then(|bytes| image::load_from_memory(&bytes).ok())
@@ -2482,20 +2490,25 @@ impl App {
             .show(ctx, |ui| {
                 ui.set_width(360.0);
                 match dialog {
-                    Dialog::Edit { uuid, mut title, mut description, cover } => {
+                    Dialog::Edit { uuid, mut title, mut description, mut cover, current, mut remove } => {
                         ui.heading("Edit playlist");
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            // cover: the chosen image, or a hint
+                            // the new image if one is chosen, otherwise what the playlist shows now
                             let (rect, resp) = ui.allocate_exact_size(egui::vec2(96.0, 96.0), egui::Sense::click());
                             pointer_on_hover(&resp);
-                            match &self.cover_preview {
-                                Some(tex) if cover.is_some() => {
-                                    egui::Image::new(egui::load::SizedTexture::new(tex.id(), rect.size()))
+                            let shown = match (&self.cover_preview, &cover) {
+                                (Some(tex), Some(_)) => Some(tex.id()),
+                                _ if remove => None,
+                                _ => current.as_deref().and_then(|u| self.textures.get(u)).map(|t| t.id()),
+                            };
+                            match shown {
+                                Some(id) => {
+                                    egui::Image::new(egui::load::SizedTexture::new(id, rect.size()))
                                         .corner_radius(10.0)
                                         .paint_at(ui, rect);
                                 }
-                                _ => {
+                                None => {
                                     ui.painter().rect_filled(rect, 10.0, CARD_HOVER);
                                     ui::paint_icon(ui.painter(), rect.center(), icons::IMAGE, 30.0, TEXT_DIM, egui::FontFamily::Proportional);
                                 }
@@ -2504,43 +2517,52 @@ impl App {
                                 ui.painter().rect_filled(rect, 10.0, Color32::from_black_alpha(90));
                                 ui::paint_icon(ui.painter(), rect.center(), icons::PENCIL_SIMPLE, 24.0, Color32::WHITE, egui::FontFamily::Proportional);
                             }
-                            let pick = resp.on_hover_text("Choose a cover image").clicked();
+                            let mut pick = resp.on_hover_text("Choose a cover image").clicked();
                             ui.vertical(|ui| {
-                                ui.add_space(4.0);
                                 ui.label(RichText::new("Cover").size(12.0).color(TEXT_DIM));
-                                let name = cover
-                                    .as_ref()
-                                    .and_then(|p| p.file_name())
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "unchanged".to_string());
-                                ui.label(RichText::new(ellipsize(&name, 28)).size(13.0));
-                                if ui.button("Choose image…").clicked() || pick {
-                                    if self.cover_pick.is_none() {
-                                        let (tx, rx) = std::sync::mpsc::channel();
-                                        self.cover_pick = Some(rx);
-                                        let ctx = ui.ctx().clone();
-                                        std::thread::spawn(move || {
-                                            // the Linux portal dialog needs a Tokio runtime
-                                            let picked = tokio::runtime::Builder::new_current_thread()
-                                                .enable_all()
-                                                .build()
-                                                .ok()
-                                                .and_then(|rt| {
-                                                    rt.block_on(
-                                                        rfd::AsyncFileDialog::new()
-                                                            .add_filter("Images (PNG, JPEG)", &["png", "jpg", "jpeg"])
-                                                            .set_title("Choose a playlist cover")
-                                                            .pick_file(),
-                                                    )
-                                                });
-                                            if let Some(file) = picked {
-                                                let _ = tx.send(file.path().to_path_buf());
-                                            }
-                                            ctx.request_repaint();
-                                        });
-                                    }
+                                if let Some(name) = cover.as_ref().and_then(|p| p.file_name()) {
+                                    ui.label(RichText::new(ellipsize(&name.to_string_lossy(), 30)).size(13.0));
+                                } else if remove {
+                                    ui.label(RichText::new("The custom cover will be removed").size(13.0).color(ui::WARN));
+                                }
+                                ui.add_space(2.0);
+                                pick |= ui.button(format!("{}  Choose image…", icons::IMAGE)).clicked();
+                                if (current.is_some() || cover.is_some())
+                                    && !remove
+                                    && ui.button(format!("{}  Remove custom cover", icons::TRASH)).clicked()
+                                {
+                                    remove = true;
+                                    cover = None;
+                                    self.cover_preview = None;
+                                }
+                                if remove && ui.button("Undo").clicked() {
+                                    remove = false;
                                 }
                             });
+                            if pick && self.cover_pick.is_none() {
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                self.cover_pick = Some(rx);
+                                let ctx = ui.ctx().clone();
+                                std::thread::spawn(move || {
+                                    // the Linux portal dialog needs a Tokio runtime
+                                    let picked = tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build()
+                                        .ok()
+                                        .and_then(|rt| {
+                                            rt.block_on(
+                                                rfd::AsyncFileDialog::new()
+                                                    .add_filter("Images (PNG, JPEG)", &["png", "jpg", "jpeg"])
+                                                    .set_title("Choose a playlist cover")
+                                                    .pick_file(),
+                                            )
+                                        });
+                                    if let Some(file) = picked {
+                                        let _ = tx.send(file.path().to_path_buf());
+                                    }
+                                    ctx.request_repaint();
+                                });
+                            }
                         });
                         ui.add_space(8.0);
                         ui.label(RichText::new("Title").size(12.0).color(TEXT_DIM));
@@ -2566,9 +2588,9 @@ impl App {
                             cancel = ui.button("Cancel").clicked();
                         });
                         if done && ok {
-                            confirm = Some(Dialog::Edit { uuid, title, description, cover });
+                            confirm = Some(Dialog::Edit { uuid, title, description, cover, current, remove });
                         } else if !cancel {
-                            keep = Some(Dialog::Edit { uuid, title, description, cover });
+                            keep = Some(Dialog::Edit { uuid, title, description, cover, current, remove });
                         }
                     }
                     Dialog::Create { mut text } => {
@@ -2622,7 +2644,7 @@ impl App {
         }
         self.dialog = keep;
         match confirm {
-            Some(Dialog::Edit { uuid, title, description, cover }) => {
+            Some(Dialog::Edit { uuid, title, description, cover, remove, .. }) => {
                 let title = title.trim().to_string();
                 let description = description.trim().to_string();
                 for pl in &mut self.playlists {
@@ -2659,7 +2681,10 @@ impl App {
                     self.toast("Saving… the new cover is processed by TIDAL".into());
                 }
                 self.cover_preview = None;
-                self.net.send(Cmd::EditPlaylist { uuid, title, description, cover });
+                if remove && cover.is_none() {
+                    self.toast("Removing the custom cover…".into());
+                }
+                self.net.send(Cmd::EditPlaylist { uuid, title, description, cover, remove_cover: remove });
             }
             Some(Dialog::Delete { uuid, .. }) => {
                 self.playlists.retain(|p| p.uuid != uuid);
@@ -2762,6 +2787,8 @@ impl App {
                             title: open.title.clone(),
                             description: open.description.clone(),
                             cover: None,
+                            current: open.cover.clone(),
+                            remove: false,
                         });
                     }
                 });

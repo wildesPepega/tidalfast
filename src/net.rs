@@ -35,6 +35,8 @@ pub enum Cmd {
         title: String,
         description: String,
         cover: Option<std::path::PathBuf>,
+        /// Go back to the generated cover.
+        remove_cover: bool,
     },
     DeletePlaylist {
         uuid: String,
@@ -255,7 +257,7 @@ async fn worker(
                     Err(e) => send_error(&ev, e),
                 }
             }
-            Cmd::EditPlaylist { uuid, title, description, cover } => {
+            Cmd::EditPlaylist { uuid, title, description, cover, remove_cover } => {
                 let result = async {
                     client.update_playlist(&uuid, &title, &description).await?;
                     if let Some(path) = cover {
@@ -263,6 +265,8 @@ async fn worker(
                             .await
                             .map_err(|e| anyhow::anyhow!("Could not read the image ({e})"))?;
                         client.set_playlist_cover(&uuid, &bytes).await?;
+                    } else if remove_cover {
+                        client.remove_playlist_cover(&uuid).await?;
                     }
                     Ok(())
                 }

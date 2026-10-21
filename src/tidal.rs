@@ -477,6 +477,17 @@ impl TidalClient {
         Ok(())
     }
 
+    /// Remove a custom cover: TIDAL goes back to the generated one.
+    pub async fn remove_playlist_cover(&mut self, uuid: &str) -> Result<()> {
+        self.openapi(
+            reqwest::Method::PATCH,
+            &format!("/playlists/{uuid}/relationships/coverArt"),
+            Some(&serde_json::json!({ "data": [] })),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn delete_playlist(&mut self, uuid: &str) -> Result<()> {
         let cc = self.country_code.clone();
         let etag = self.playlist_etag(uuid).await?;
@@ -1239,6 +1250,10 @@ mod live {
                 let sq = v1.get("squareImage").and_then(Value::as_str).unwrap_or("").replace('-', "/");
                 let r = c.http.get(format!("https://resources.tidal.com/images/{sq}/320x320.jpg")).send().await?;
                 println!("CDN {} {:?}", r.status(), r.headers().get("content-length"));
+                println!("with cover: square {}", sq);
+                c.remove_playlist_cover(&uuid).await?;
+                let after = c.playlist(&uuid).await?;
+                println!("after removal: square {:?} image {:?}", after.square_image, after.image);
                 let v2 = c.openapi(reqwest::Method::GET, &format!("/playlists/{uuid}?include=coverArt"), None).await?;
                 println!("V2: {}", serde_json::to_string(&v2)?);
                 anyhow::Ok(())

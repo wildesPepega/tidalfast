@@ -209,6 +209,8 @@ pub struct App {
     unmuted_volume: f32,
     /// The upcoming track handed to the audio engine: (queue index, shuffle position, track id).
     preload: Option<(usize, Option<usize>, u64)>,
+    /// Last click on a playlist in the collapsed sidebar.
+    lib_click: Option<(String, Instant)>,
     /// Media keys / tray integration.
     system: System,
     /// The window is hidden (in the tray).
@@ -352,6 +354,7 @@ impl App {
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
+            lib_click: None,
             system: System::new(cc),
             window_hidden: false,
             quitting: false,
@@ -1769,7 +1772,24 @@ impl App {
         if want_create {
             self.dialog = Some(Dialog::Create { text: String::new() });
         }
-        if let Some((pl, action)) = act {
+        if let Some((pl, mut action)) = act {
+            // Collapsed sidebar: a click opens, a second click on the *same*
+            // playlist plays. (egui's own double click ignores which widget
+            // was hit, so quick clicks on two playlists would count.)
+            if matches!(action, PlAction::Open) && self.sidebar_t < 0.5 {
+                let again = self
+                    .lib_click
+                    .as_ref()
+                    .is_some_and(|(uuid, at)| *uuid == pl.uuid && at.elapsed() < Duration::from_millis(400));
+                if again {
+                    action = PlAction::Play;
+                    self.lib_click = None;
+                } else {
+                    self.lib_click = Some((pl.uuid.clone(), Instant::now()));
+                }
+            } else {
+                self.lib_click = None;
+            }
             self.apply_pl_action(pl, action);
         }
     }
@@ -4628,7 +4648,9 @@ fn library_row(
     let art_x = ((LIBRARY_COLLAPSED - 16.0 - 46.0) * 0.5).floor();
     let art = egui::Rect::from_min_size(rect.min + egui::vec2(art_x, 6.0), egui::vec2(46.0, 46.0));
     let collapsed = reveal < 0.5;
-    let dim = if hovered {
+    // the dimming and the play button belong to the cover alone
+    let over_art = ui.rect_contains_pointer(art);
+    let dim = if over_art {
         120
     } else if st.playing_here {
         150
@@ -4645,9 +4667,9 @@ fn library_row(
     }
 
     let mut action = None;
-    if hovered {
-        // collapsed: a click opens the playlist and a double click plays it;
-        // expanded: play button on the cover
+    if over_art {
+        // collapsed: a click opens the playlist (a quick second click plays
+        // it, see `library`); expanded: play button on the cover
         if !collapsed {
             let pause = st.playing_here && st.playing;
             if overlay_play(ui, art.center(), 15.0, pause, resp.id.with("play")).clicked() {
@@ -4679,9 +4701,7 @@ fn library_row(
 
     resp.context_menu(|ui| playlist_menu(ui, st, &mut action));
     if action.is_none() {
-        if collapsed && resp.double_clicked() {
-            action = Some(PlAction::Play);
-        } else if resp.clicked() {
+        if resp.clicked() {
             action = Some(PlAction::Open);
         }
     }

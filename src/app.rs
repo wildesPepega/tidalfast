@@ -4386,13 +4386,15 @@ fn menu_item(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
 /// The green-to-cyan "liked songs" tile with a heart.
 fn liked_art(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-    paint_liked_art(ui.painter(), rect, 12.0);
+    paint_liked_art(ui.painter(), rect, 12.0, 0);
     resp
 }
 
 /// The green-to-cyan "liked songs" tile with a heart, with rounded corners
 /// like every other cover (so hover overlays line up with it).
-fn paint_liked_art(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
+/// `dim`: black overlay strength (0‥255), baked into the colours so it covers
+/// exactly the same area as the art, down to the last edge pixel.
+fn paint_liked_art(painter: &egui::Painter, rect: egui::Rect, radius: f32, dim: u8) {
     let (a, b) = (Color32::from_rgb(166, 227, 161), Color32::from_rgb(137, 220, 235));
     let mid = Color32::from_rgb(148, 226, 213);
     // colour at a point: bilinear blend of the four corner colours
@@ -4406,7 +4408,9 @@ fn paint_liked_art(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
                 (x.b() as f32 + (y.b() as f32 - x.b() as f32) * t) as u8,
             )
         };
-        lerp(lerp(a, mid, u), lerp(mid, b, u), v)
+        let c = lerp(lerp(a, mid, u), lerp(mid, b, u), v);
+        let keep = 1.0 - dim as f32 / 255.0;
+        Color32::from_rgb((c.r() as f32 * keep) as u8, (c.g() as f32 * keep) as u8, (c.b() as f32 * keep) as u8)
     };
     // outline of the rounded rectangle, as a fan around the centre
     let r = radius.min(rect.width() * 0.5).max(0.0);
@@ -4558,7 +4562,7 @@ fn media_card(
     }
     let art = egui::Rect::from_min_size(rect.min + egui::vec2(16.0, 14.0), egui::vec2(img, img));
     if liked {
-        paint_liked_art(ui.painter(), art, 12.0);
+        paint_liked_art(ui.painter(), art, 12.0, 0);
     } else {
         paint_cover_r(ui, textures, url, art, if round { img / 2.0 } else { 12.0 });
     }
@@ -4623,21 +4627,36 @@ fn library_row(
     // centred in the collapsed sidebar: (72 − 2 × 8 padding − 46) / 2
     let art_x = ((LIBRARY_COLLAPSED - 16.0 - 46.0) * 0.5).floor();
     let art = egui::Rect::from_min_size(rect.min + egui::vec2(art_x, 6.0), egui::vec2(46.0, 46.0));
+    let collapsed = reveal < 0.5;
+    let dim = if hovered {
+        120
+    } else if st.playing_here {
+        150
+    } else {
+        0
+    };
     if liked {
-        paint_liked_art(ui.painter(), art, 8.0);
+        paint_liked_art(ui.painter(), art, 8.0, dim);
     } else {
         paint_cover_r(ui, textures, cover_url, art, 8.0);
+        if dim > 0 {
+            ui.painter().rect_filled(art, 8.0, Color32::from_black_alpha(dim));
+        }
     }
 
     let mut action = None;
     if hovered {
-        ui.painter().rect_filled(art, 8.0, Color32::from_black_alpha(120));
-        let pause = st.playing_here && st.playing;
-        if overlay_play(ui, art.center(), 15.0, pause, resp.id.with("play")).clicked() {
-            action = Some(PlAction::Play);
+        // collapsed: a click opens the playlist and a double click plays it;
+        // expanded: play button on the cover
+        if !collapsed {
+            let pause = st.playing_here && st.playing;
+            if overlay_play(ui, art.center(), 15.0, pause, resp.id.with("play")).clicked() {
+                action = Some(PlAction::Play);
+            }
+        } else if st.playing_here {
+            playing_bars(ui, art.center(), 22.0, ACCENT, &st.bars, st.playing);
         }
     } else if st.playing_here {
-        ui.painter().rect_filled(art, 8.0, Color32::from_black_alpha(150));
         playing_bars(ui, art.center(), 22.0, ACCENT, &st.bars, st.playing);
     }
 
@@ -4659,8 +4678,12 @@ fn library_row(
     child.add(egui::Label::new(RichText::new(subtitle).size(12.0).color(fade(TEXT_DIM))).truncate());
 
     resp.context_menu(|ui| playlist_menu(ui, st, &mut action));
-    if action.is_none() && resp.clicked() {
-        action = Some(PlAction::Open);
+    if action.is_none() {
+        if collapsed && resp.double_clicked() {
+            action = Some(PlAction::Play);
+        } else if resp.clicked() {
+            action = Some(PlAction::Open);
+        }
     }
     action
 }

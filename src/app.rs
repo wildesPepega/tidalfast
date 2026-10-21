@@ -232,7 +232,6 @@ pub struct App {
     avatar_rect: egui::Rect,
     settings_tab: SettingsTab,
     profile_menu_open: bool,
-    picture_url: Option<String>,
     liked_count: Option<usize>,
 
     eq_shared: Arc<EqShared>,
@@ -284,8 +283,6 @@ impl App {
             country: cfg.country_code.clone(),
         });
 
-        let picture_url = (!cfg.user_picture.is_empty())
-            .then(|| crate::model::tidal_image_url(&cfg.user_picture, 210));
         let mut app = Self {
             playlists_loading: logged_in,
             cfg,
@@ -361,7 +358,6 @@ impl App {
             sys_sent: None,
             sys_dirty: false,
             profile_menu_open: false,
-            picture_url,
             liked_count: None,
             eq_shared,
             eq_preset: None,
@@ -473,9 +469,6 @@ impl App {
                     country_code,
                 } => {
                     self.cfg.user_picture = picture.clone().unwrap_or_default();
-                    self.picture_url = picture
-                        .as_deref()
-                        .map(|id| crate::model::tidal_image_url(id, 210));
                     self.cfg.user_id = Some(user_id);
                     self.cfg.user_name = user_name.clone();
                     self.cfg.country_code = country_code.clone();
@@ -1275,7 +1268,6 @@ impl App {
     /// Load covers that every view is about to need, before anything is drawn.
     fn prefetch_covers(&mut self) {
         let mut urls: Vec<String> = Vec::new();
-        urls.extend(self.picture_url.clone());
         urls.extend(self.current.as_ref().and_then(|t| t.cover_url(COVER_NOW)));
         urls.extend(self.playlists.iter().filter_map(|p| p.cover_url()));
         for (_, list) in &self.home {
@@ -1456,7 +1448,6 @@ impl App {
         crate::cache::clear();
         self.home.clear();
         self.liked_ids.clear();
-        self.picture_url = None;
         self.liked_count = None;
         self.cfg.save();
         self.dirty = false;
@@ -1488,17 +1479,9 @@ impl App {
         let at_home = self.view == View::Playlists && self.open_playlist.is_none() && !self.now_open;
         if self.user.is_some() {
             pointer_on_hover(&home);
-            let fill = if home.hovered() { ui::LINE } else { CARD_HOVER };
-            let painter = left.painter();
-            let radius = egui::CornerRadius::same(ui::CARD_RADIUS);
-            painter.rect_filled(tile, radius, fill);
-            painter.rect_stroke(tile, radius, egui::Stroke::new(1.0_f32, ui::EDGE), egui::StrokeKind::Inside);
-            let (family, color) = if at_home {
-                (ui::fill_family(), ui::TEXT)
-            } else {
-                (egui::FontFamily::Proportional, if home.hovered() { ui::TEXT } else { TEXT_DIM })
-            };
-            ui::paint_icon(painter, tile.center(), icons::HOUSE, 21.0, color, family);
+            let color = if at_home { ACCENT } else { ui::TEXT };
+            let family = if at_home { ui::fill_family() } else { egui::FontFamily::Proportional };
+            top_tile(&left, tile, home.hovered(), icons::HOUSE, 21.0, color, family);
             if home.on_hover_text("Home").clicked() {
                 self.go_home();
             }
@@ -1601,43 +1584,21 @@ impl App {
             resp.request_focus();
         }
 
-        // right: profile picture
+        // right: settings / account menu
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(rect)
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
-        let size = 38.0;
-        let (avatar, resp) = right.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+        let (tile, resp) = right.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
         pointer_on_hover(&resp);
-        let name = self.user.as_ref().map(|u| u.name.clone()).unwrap_or_default();
-        let texture = self.picture_url.as_deref().and_then(|u| self.textures.get(u));
-        let painter = right.painter();
-        painter.circle_filled(avatar.center(), size * 0.5 + 3.0, if resp.hovered() || self.profile_menu_open { CARD_HOVER } else { CARD });
-        match texture {
-            Some(tex) => {
-                egui::Image::new(egui::load::SizedTexture::new(tex.id(), egui::vec2(size, size)))
-                    .corner_radius(size * 0.5)
-                    .paint_at(&right, avatar);
-            }
-            None => {
-                painter.circle_filled(avatar.center(), size * 0.5, ACCENT);
-                painter.text(
-                    avatar.center(),
-                    egui::Align2::CENTER_CENTER,
-                    name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".into()),
-                    egui::FontId::proportional(17.0),
-                    BG,
-                );
-            }
-        }
-        if resp.clicked() {
+        let open = resp.hovered() || self.profile_menu_open;
+        let color = if self.profile_menu_open { ACCENT } else { ui::TEXT };
+        top_tile(&right, tile, open, icons::GEAR, 21.0, color, egui::FontFamily::Proportional);
+        if resp.on_hover_text("Settings").clicked() {
             self.profile_menu_open = !self.profile_menu_open;
         }
-        self.avatar_rect = avatar;
-        if let Some(url) = self.picture_url.clone() {
-            self.request_cover(&url);
-        }
+        self.avatar_rect = tile;
     }
 
     /// Spotify-style profile dropdown anchored below the avatar.
@@ -4623,6 +4584,29 @@ fn media_card(
 /// One entry of the library: cover (with play button on hover and the
 /// visualizer while playing), title and subtitle.
 #[allow(clippy::too_many_arguments)]
+/// A square (or wide) button tile on the top bar. Dark and nearly opaque, so
+/// the icon stays readable on every wallpaper colour.
+fn top_tile(
+    ui: &egui::Ui,
+    tile: egui::Rect,
+    hovered: bool,
+    icon: &str,
+    size: f32,
+    color: Color32,
+    family: egui::FontFamily,
+) {
+    let fill = if hovered {
+        Color32::from_rgba_unmultiplied(44, 46, 64, 235)
+    } else {
+        Color32::from_rgba_unmultiplied(19, 20, 30, 215)
+    };
+    let painter = ui.painter();
+    let radius = egui::CornerRadius::same(ui::CARD_RADIUS);
+    painter.rect_filled(tile, radius, fill);
+    painter.rect_stroke(tile, radius, egui::Stroke::new(1.0_f32, ui::EDGE), egui::StrokeKind::Inside);
+    ui::paint_icon(painter, tile.center(), icon, size, color, family);
+}
+
 fn library_row(
     ui: &mut egui::Ui,
     textures: &HashMap<String, TextureHandle>,

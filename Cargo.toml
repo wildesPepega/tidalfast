@@ -1,0 +1,48 @@
+[package]
+name = "tidalfast"
+version = "0.1.0"
+edition = "2021"
+description = "A simple, native TIDAL client built with egui"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+dirs = "6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "blocking"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "fs"] }
+
+eframe = { version = "0.31", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+egui = "0.31"
+egui-phosphor = { version = "0.9", features = ["regular", "bold", "fill"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+rodio = { version = "0.22", default-features = false, features = [
+    "playback",
+    "flac",
+    "mp3",
+    "mp4",
+    "wav",
+    "vorbis",
+] }
+cpal = "0.17"
+
+discord-rich-presence = "1.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Dependencies (decoders, egui) optimised even in debug builds.
+[profile.dev.package."*"]
+opt-level = 3

@@ -37,7 +37,8 @@ fn main() -> eframe::Result<()> {
         if ipc::forward(link_arg.as_deref().unwrap_or("focus")) {
             return Ok(());
         }
-        desktop::register_link_handler();
+        let handler = config::Settings::load().link_handler;
+        std::thread::spawn(move || desktop::set_link_handler(handler));
     }
 
     let mut viewport = eframe::egui::ViewportBuilder::default()

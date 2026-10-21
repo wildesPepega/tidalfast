@@ -3742,6 +3742,22 @@ impl App {
                         .color(TEXT_DIM),
                 );
 
+                ui.add_space(14.0);
+                let mut handler = self.cfg.link_handler;
+                if ui.checkbox(&mut handler, "Open spotify: and tidal: links in tidalfast").changed() {
+                    self.cfg.link_handler = handler;
+                    std::thread::spawn(move || crate::desktop::set_link_handler(handler));
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new(
+                        "Browsers then ask whether to open such links in tidalfast. Normal web addresses \
+                         (https://open.spotify.com/…, https://tidal.com/…) always open in the browser, as no app can \
+                         intercept them – copy them into the search field instead.",
+                    )
+                    .color(TEXT_DIM),
+                );
+
                 ui.add_space(22.0);
                 self.update_settings(ui);
             }

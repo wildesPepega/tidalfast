@@ -73,6 +73,14 @@ pub fn parse(input: &str) -> Option<Link> {
             .map(|word| word.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | '(' | ')' | ',')))
             .find_map(|word| (!word.contains(char::is_whitespace)).then(|| parse(word)).flatten());
     }
+    // `tidal://track/123`, `tidal:track:123`, `tidal://browse/playlist/<uuid>`
+    if let Some(rest) = input.strip_prefix("tidal:") {
+        let parts: Vec<&str> = rest
+            .split(|c| matches!(c, ':' | '/' | '?' | '#'))
+            .filter(|p| !p.is_empty() && *p != "browse" && *p != "u")
+            .collect();
+        return tidal(Kind::parse(parts.first()?)?, parts.get(1)?);
+    }
     if let Some(rest) = input.strip_prefix("spotify:") {
         let rest = rest.trim_start_matches("//");
         let mut parts = rest.split(|c| c == ':' || c == '/');
@@ -128,17 +136,19 @@ pub fn parse(input: &str) -> Option<Link> {
             while segs.first().is_some_and(|s| *s == "browse" || *s == "u") {
                 segs.remove(0);
             }
-            let kind = Kind::parse(segs.first()?)?;
-            let id = *segs.get(1)?;
-            let valid = if kind == Kind::Playlist {
-                id.len() >= 32 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-            } else {
-                id.chars().all(|c| c.is_ascii_digit())
-            };
-            valid.then(|| Link { service: Service::Tidal, kind, id: id.to_string() })
+            tidal(Kind::parse(segs.first()?)?, segs.get(1)?)
         }
         _ => None,
     }
+}
+
+fn tidal(kind: Kind, id: &str) -> Option<Link> {
+    let valid = if kind == Kind::Playlist {
+        id.len() >= 32 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    } else {
+        !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())
+    };
+    valid.then(|| Link { service: Service::Tidal, kind, id: id.to_string() })
 }
 
 fn video(id: &str) -> Option<Link> {
@@ -180,6 +190,25 @@ mod tests {
         assert_eq!((l.service, l.kind, l.id.as_str()), (Service::Tidal, Kind::Track, "3202471"));
         assert!(parse("https://listen.tidal.com/album/573283").is_some());
         assert!(parse("https://tidal.com/browse/playlist/7c2e1d5a-0c0a-4c1c-8f7c-0d3a5b1c2e4f").is_some());
+    }
+
+    #[test]
+    fn tidal_uris_and_share_links() {
+        for url in [
+            "tidal://track/346295347",
+            "tidal:track:346295347",
+            "tidal://browse/track/346295347",
+            "https://tidal.com/track/346295347/u",
+            "https://tidal.com/browse/track/346295347?u",
+            "https://listen.tidal.com/track/346295347/u",
+        ] {
+            let l = parse(url).unwrap_or_else(|| panic!("{url}"));
+            assert_eq!((l.service, l.kind, l.id.as_str()), (Service::Tidal, Kind::Track, "346295347"), "{url}");
+        }
+        let l = parse("tidal://playlist/7c2e1d5a-0c0a-4c1c-8f7c-0d3a5b1c2e4f").unwrap();
+        assert_eq!(l.kind, Kind::Playlist);
+        assert!(parse("tidal://login/auth").is_none());
+        assert!(parse("tidal://track/abc").is_none());
     }
 
     #[test]

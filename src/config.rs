@@ -27,6 +27,8 @@ pub struct Settings {
     pub media_keys: bool,
     /// Tray icon.
     pub tray: bool,
+    /// Handle `spotify:` and `tidal:` links (browsers offer to open them in tidalfast).
+    pub link_handler: bool,
     /// Look for a new version at startup (and every few hours).
     pub check_updates: bool,
     /// Download and install new versions without asking.
@@ -71,6 +73,7 @@ impl Default for Settings {
             discord: true,
             media_keys: true,
             tray: false,
+            link_handler: true,
             check_updates: true,
             auto_update: false,
             close_to_tray: false,

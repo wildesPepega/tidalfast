@@ -262,6 +262,8 @@ mod tests {
         o.set(Some(Song { id: 1, title: "T".into(), duration: 100.0, ..Default::default() }), false, 12.0);
         let json = get(47231, "/api/now");
         assert!(json.contains("\"title\":\"T\"") && json.contains("\"position\":12.0"), "{json}");
+        assert!(get(47231, "/card.rgba").starts_with("HTTP/1.1 204"), "paused: no card");
+        o.set(Some(Song { id: 1, title: "T".into(), duration: 100.0, ..Default::default() }), true, 12.0);
         let card = get(47231, "/card.rgba");
         assert!(card.contains("X-Width: 380") && card.contains("X-Height: 96"), "{}", &card[..card.len().min(80)]);
         assert!(get(47231, "/nope").starts_with("HTTP/1.1 404"));

@@ -4,7 +4,7 @@
  * only uploads it as a texture and draws one quad in a corner.
  *
  * Optional settings in ~/.config/tidalfast/gsr-overlay.conf, one per line:
- *   port=7788   corner=bl|br|tl|tr   scale=1.0   margin=24   flip=0|1
+ *   port=7788   corner=bl|br|tl|tr   scale=1.0   margin=10   flip=0|1
  * (flip=1, the default, is for recorders whose picture is upside down in OpenGL)
  */
 #define _GNU_SOURCE
@@ -170,7 +170,7 @@ typedef struct {
 } Config;
 
 static void load_config(Config *c) {
-    c->port = 7788; strcpy(c->corner, "br"); c->scale = 1.0f; c->margin = 24; c->flip = 1;
+    c->port = 7788; strcpy(c->corner, "br"); c->scale = 1.0f; c->margin = 10; c->flip = 1;
     const char *base = getenv("XDG_CONFIG_HOME");
     char path[1024];
     if (base && *base) snprintf(path, sizeof path, "%s/tidalfast/gsr-overlay.conf", base);

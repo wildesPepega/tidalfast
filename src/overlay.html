@@ -8,9 +8,9 @@
   :root { --scale: 1; }
   html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     font-family: "Inter", "Segoe UI", system-ui, sans-serif; }
-  #card { position: fixed; left: calc(24px * var(--scale)); bottom: calc(24px * var(--scale));
+  #card { position: fixed; left: calc(10px * var(--scale)); bottom: calc(10px * var(--scale));
     display: flex; gap: calc(14px * var(--scale)); align-items: center;
-    width: calc(380px * var(--scale)); box-sizing: border-box; padding: calc(12px * var(--scale));
+    width: calc(320px * var(--scale)); box-sizing: border-box; padding: calc(12px * var(--scale));
     border-radius: calc(16px * var(--scale)); color: #fff;
     background: rgba(12, 14, 18, .78); backdrop-filter: blur(10px);
     box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
@@ -26,6 +26,11 @@
   #bar { margin-top: calc(10px * var(--scale)); height: calc(4px * var(--scale)); border-radius: 4px;
     background: rgba(255, 255, 255, .18); overflow: hidden; }
   #fill { height: 100%; width: 0; background: #fff; border-radius: 4px; }
+  #next { display: none; }
+  #card.hasnext { flex-wrap: wrap; }
+  #card.hasnext #next { display: block; flex-basis: 100%; margin-top: calc(2px * var(--scale));
+    padding-top: calc(8px * var(--scale)); border-top: 1px solid rgba(255,255,255,.12);
+    font-size: calc(12px * var(--scale)); color: #c4c9d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.nobar #bar { display: none; }
 </style>
 </head>
@@ -37,6 +42,7 @@
     <div id="artist"></div>
     <div id="bar"><div id="fill"></div></div>
   </div>
+  <div id="next"></div>
 </div>
 <script>
   // ?scale=1.5 enlarges everything, ?bar=0 hides the progress bar,
@@ -58,6 +64,10 @@
         $("title").textContent = state.title;
         $("artist").textContent = state.artist;
         $("cover").src = state.cover || "";
+      }
+      if (state.active) {
+        $("next").textContent = state.next ? "NEXT  " + state.next : "";
+        $("card").classList.toggle("hasnext", !!state.next);
       }
       if (!state.active) last = null;
     } catch (e) { state = null; }

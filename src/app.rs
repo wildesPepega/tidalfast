@@ -1489,6 +1489,14 @@ impl App {
             album: t.album_title(),
             cover: t.cover_url(COVER_NOW).unwrap_or_default(),
             duration: t.duration as f64,
+            next: self
+                .peek_next()
+                .and_then(|(i, _)| self.queue.get(i))
+                .map(|n| match n.artist_name() {
+                    a if a.is_empty() => n.title.clone(),
+                    a => format!("{} — {}", n.title, a),
+                })
+                .unwrap_or_default(),
         });
         self.overlay.set(song, self.playing && !self.finished, self.position);
     }

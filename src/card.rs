@@ -7,8 +7,10 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::RgbaImage;
 
 /// Card size at scale 1.
-pub const WIDTH: f32 = 380.0;
-pub const HEIGHT: f32 = 96.0;
+pub const WIDTH: f32 = 320.0;
+/// Height without / with the "next" line.
+pub const HEIGHT: f32 = 72.0;
+pub const HEIGHT_NEXT: f32 = 94.0;
 /// The cover is kept at this size (enough for scale 2).
 pub const COVER_PX: u32 = 144;
 
@@ -106,13 +108,14 @@ impl Canvas {
 }
 
 /// Draw the card for a song at `scale` (1.0 = 380×96 pixels).
-pub fn render(title: &str, artist: &str, cover: Option<&RgbaImage>, progress: Option<f32>, scale: f32) -> Card {
+pub fn render(title: &str, artist: &str, next: Option<&str>, cover: Option<&RgbaImage>, progress: Option<f32>, scale: f32) -> Card {
     let s = scale.clamp(0.5, 3.0);
-    let (w, h) = ((WIDTH * s).round() as u32, (HEIGHT * s).round() as u32);
+    let height = if next.is_some() { HEIGHT_NEXT } else { HEIGHT };
+    let (w, h) = ((WIDTH * s).round() as u32, (height * s).round() as u32);
     let mut cv = Canvas { w, h, px: vec![0.0; (w * h * 4) as usize] };
 
     // background
-    let radius = 16.0 * s;
+    let radius = 14.0 * s;
     for y in 0..h {
         for x in 0..w {
             let a = rounded(x as f32 + 0.5, y as f32 + 0.5, w as f32, h as f32, radius) * BACKGROUND[3];
@@ -125,12 +128,12 @@ pub fn render(title: &str, artist: &str, cover: Option<&RgbaImage>, progress: Op
     }
 
     // cover
-    let (cx, cy, cs) = (12.0 * s, 12.0 * s, 72.0 * s);
+    let (cx, cy, cs) = (10.0 * s, 10.0 * s, 52.0 * s);
     let side = cs.round() as u32;
     let scaled_cover = cover.map(|c| image::imageops::resize(c, side, side, image::imageops::FilterType::Triangle));
     for y in 0..side {
         for x in 0..side {
-            let a = rounded(x as f32 + 0.5, y as f32 + 0.5, cs, cs, 10.0 * s);
+            let a = rounded(x as f32 + 0.5, y as f32 + 0.5, cs, cs, 8.0 * s);
             let color = match &scaled_cover {
                 Some(img) => {
                     let p = img.get_pixel(x, y).0;
@@ -143,18 +146,29 @@ pub fn render(title: &str, artist: &str, cover: Option<&RgbaImage>, progress: Op
     }
 
     // text and progress bar
-    let tx = cx + cs + 14.0 * s;
-    let tw = w as f32 - tx - 14.0 * s;
-    cv.text(title, tx, 36.0 * s, 17.0 * s, tw, TITLE, true);
-    cv.text(artist, tx, 58.0 * s, 14.0 * s, tw, ARTIST, false);
+    let tx = cx + cs + 12.0 * s;
+    let tw = w as f32 - tx - 12.0 * s;
+    cv.text(title, tx, 27.0 * s, 15.0 * s, tw, TITLE, true);
+    cv.text(artist, tx, 44.0 * s, 12.5 * s, tw, ARTIST, false);
     if let Some(p) = progress {
-        let (by, bh) = ((70.0 * s).round() as i32, (4.0 * s).round().max(2.0) as i32);
+        let (by, bh) = ((55.0 * s).round() as i32, (3.0 * s).round().max(2.0) as i32);
         for y in 0..bh {
             for x in 0..tw.round() as i32 {
                 let filled = (x as f32) < tw * p.clamp(0.0, 1.0);
                 cv.blend(tx as i32 + x, by + y, [255.0; 3], if filled { 1.0 } else { 0.18 });
             }
         }
+    }
+
+    if let Some(next) = next {
+        // a faint divider, then what comes next
+        let dy = (68.0 * s).round() as i32;
+        for x in (10.0 * s) as i32..(w as f32 - 10.0 * s) as i32 {
+            cv.blend(x, dy, [255.0; 3], 0.12);
+        }
+        let label = "NEXT";
+        cv.text(label, 10.0 * s, 85.0 * s, 10.0 * s, 40.0 * s, [140.0, 146.0, 160.0], true);
+        cv.text(next, 10.0 * s + 36.0 * s, 85.0 * s, 12.0 * s, w as f32 - 56.0 * s, ARTIST, false);
     }
 
     let pixels = cv.px.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
@@ -167,10 +181,11 @@ mod tests {
 
     #[test]
     fn draws_a_card_with_rounded_transparent_corners() {
-        let card = render("A rather long title that must be cut off with an ellipsis", "Artist", None, Some(0.4), 1.0);
-        assert_eq!((card.width, card.height), (380, 96));
+        let card = render("A rather long title that must be cut off with an ellipsis", "Artist", Some("Next Song — Someone"), None, Some(0.4), 1.0);
+        assert_eq!((card.width, card.height), (320, 94));
+        assert_eq!(render("T", "A", None, None, None, 1.0).height, 72);
         assert_eq!(card.pixels[3], 0, "corner is transparent");
-        let mid = ((48 * 380 + 300) * 4) as usize;
+        let mid = ((36 * 320 + 300) * 4) as usize;
         assert!(card.pixels[mid + 3] > 150, "background is mostly opaque");
         // some text pixels are brighter than the background
         assert!(card.pixels.chunks(4).any(|p| p[0] > 200 && p[3] > 200));

@@ -21,6 +21,8 @@ pub struct Song {
     pub album: String,
     pub cover: String,
     pub duration: f64,
+    /// "Title — Artist" of the track that follows (empty: none).
+    pub next: String,
 }
 
 #[derive(Default)]
@@ -196,7 +198,7 @@ fn card_bytes(shared: &Mutex<Shared>, scale: f32) -> Option<(u32, u32, Vec<u8>)>
     }
     let progress = (song.duration > 0.0).then(|| (position / song.duration) as f32);
     let cover = s.cover.as_ref().and_then(|(_, img)| img.as_ref());
-    let card = crate::card::render(&song.title, &song.artist, cover, progress, scale);
+    let card = crate::card::render(&song.title, &song.artist, (!song.next.is_empty()).then_some(song.next.as_str()), cover, progress, scale);
     Some((card.width, card.height, card.pixels))
 }
 
@@ -217,6 +219,7 @@ fn snapshot(shared: &Mutex<Shared>) -> serde_json::Value {
         "title": song.title,
         "artist": song.artist,
         "album": song.album,
+        "next": song.next,
         "cover": song.cover,
         "duration": song.duration,
         "position": position.min(song.duration.max(0.0)),
@@ -265,7 +268,7 @@ mod tests {
         assert!(get(47231, "/card.rgba").starts_with("HTTP/1.1 204"), "paused: no card");
         o.set(Some(Song { id: 1, title: "T".into(), duration: 100.0, ..Default::default() }), true, 12.0);
         let card = get(47231, "/card.rgba");
-        assert!(card.contains("X-Width: 380") && card.contains("X-Height: 96"), "{}", &card[..card.len().min(80)]);
+        assert!(card.contains("X-Width: 320") && card.contains("X-Height: 72"), "{}", &card[..card.len().min(80)]);
         assert!(get(47231, "/nope").starts_with("HTTP/1.1 404"));
         o.apply(false, 47231);
         std::thread::sleep(Duration::from_millis(300));

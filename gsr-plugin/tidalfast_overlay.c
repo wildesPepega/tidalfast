@@ -106,19 +106,41 @@ FN(void, p_glGenVertexArrays, (GLsizei, GLuint *));
 FN(void, p_glBindVertexArray, (GLuint));
 FN(void, p_glDeleteVertexArrays, (GLsizei, const GLuint *));
 
+static gsr_plugin_graphics_api g_api;
 static void *(*get_proc)(const char *);
+static void *libs[4];
+static int nlibs;
+
+/* The recorder loads its GL libraries privately, so their symbols are not
+ * visible globally: look in the libraries it already has loaded. */
+static void *open_loaded(const char *name) {
+    void *h = dlopen(name, RTLD_NOW | RTLD_NOLOAD);
+    if (h && nlibs < 4) libs[nlibs++] = h;
+    return h;
+}
 
 static void *resolve(const char *name) {
     void *f = dlsym(RTLD_DEFAULT, name);
+    for (int i = 0; !f && i < nlibs; i++) f = dlsym(libs[i], name);
     if (!f && get_proc) f = get_proc(name);
     return f;
 }
 
 #define LOAD(name) (p_##name = resolve(#name))
 static int load_gl(void) {
-    get_proc = dlsym(RTLD_DEFAULT, "eglGetProcAddress");
+    nlibs = 0;
+    void *egl = open_loaded("libEGL.so.1");
+    void *glx = open_loaded("libGLX.so.0");
+    open_loaded("libGL.so.1");
+    open_loaded("libGLESv2.so.2");
+    if (g_api == GSR_PLUGIN_GRAPHICS_API_EGL_ES) {
+        if (egl) get_proc = dlsym(egl, "eglGetProcAddress");
+    } else if (glx) {
+        get_proc = dlsym(glx, "glXGetProcAddressARB");
+        if (!get_proc) get_proc = dlsym(glx, "glXGetProcAddress");
+    }
+    if (!get_proc) get_proc = dlsym(RTLD_DEFAULT, "eglGetProcAddress");
     if (!get_proc) get_proc = dlsym(RTLD_DEFAULT, "glXGetProcAddress");
-    if (!get_proc) get_proc = dlsym(RTLD_DEFAULT, "glXGetProcAddressARB");
     int ok = 1;
     ok &= !!LOAD(glViewport); ok &= !!LOAD(glEnable); ok &= !!LOAD(glDisable); ok &= !!LOAD(glIsEnabled);
     ok &= !!LOAD(glBlendFuncSeparate); ok &= !!LOAD(glGetIntegerv); ok &= !!LOAD(glActiveTexture);
@@ -290,6 +312,7 @@ static int make_program(Plugin *p, const char *vs, const char *fs) {
 
 static void setup_gl(Plugin *p, gsr_plugin_graphics_api api) {
     if (!load_gl()) { p->gl_failed = 1; fprintf(stderr, "tidalfast overlay: OpenGL functions missing\n"); return; }
+    fprintf(stderr, "tidalfast overlay: drawing with %s\n", g_api == GSR_PLUGIN_GRAPHICS_API_EGL_ES ? "EGL/GLES" : "GLX");
     static const char *vs_es = "#version 100\nattribute vec2 pos; attribute vec2 uv; varying vec2 v;\n"
         "void main(){ v = uv; gl_Position = vec4(pos, 0.0, 1.0); }\n";
     static const char *fs_es = "#version 100\nprecision mediump float; varying vec2 v; uniform sampler2D tex;\n"
@@ -314,8 +337,6 @@ static void setup_gl(Plugin *p, gsr_plugin_graphics_api api) {
     p_glGenBuffers(1, &p->vbo);
     p->gl_ready = 1;
 }
-
-static gsr_plugin_graphics_api g_api;
 
 static void draw(const gsr_plugin_draw_params *params, void *userdata) {
     Plugin *p = userdata;

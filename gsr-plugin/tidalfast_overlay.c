@@ -5,6 +5,7 @@
  *
  * Optional settings in ~/.config/tidalfast/gsr-overlay.conf, one per line:
  *   port=7788   corner=bl|br|tl|tr   scale=1.0   margin=24   flip=0|1
+ * (flip=1, the default, is for recorders whose picture is upside down in OpenGL)
  */
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -94,6 +95,7 @@ FN(void, p_glDeleteProgram, (GLuint));
 FN(GLint, p_glGetAttribLocation, (GLuint, const GLchar *));
 FN(GLint, p_glGetUniformLocation, (GLuint, const GLchar *));
 FN(void, p_glUniform1i, (GLint, GLint));
+FN(void, p_glUniform1f, (GLint, GLfloat));
 FN(void, p_glGenBuffers, (GLsizei, GLuint *));
 FN(void, p_glDeleteBuffers, (GLsizei, const GLuint *));
 FN(void, p_glBindBuffer, (GLenum, GLuint));
@@ -150,7 +152,7 @@ static int load_gl(void) {
     ok &= !!LOAD(glCompileShader); ok &= !!LOAD(glGetShaderiv); ok &= !!LOAD(glDeleteShader);
     ok &= !!LOAD(glCreateProgram); ok &= !!LOAD(glAttachShader); ok &= !!LOAD(glLinkProgram);
     ok &= !!LOAD(glGetProgramiv); ok &= !!LOAD(glUseProgram); ok &= !!LOAD(glDeleteProgram);
-    ok &= !!LOAD(glGetAttribLocation); ok &= !!LOAD(glGetUniformLocation); ok &= !!LOAD(glUniform1i);
+    ok &= !!LOAD(glGetAttribLocation); ok &= !!LOAD(glGetUniformLocation); ok &= !!LOAD(glUniform1i); ok &= !!LOAD(glUniform1f);
     ok &= !!LOAD(glGenBuffers); ok &= !!LOAD(glDeleteBuffers); ok &= !!LOAD(glBindBuffer);
     ok &= !!LOAD(glBufferData); ok &= !!LOAD(glEnableVertexAttribArray);
     ok &= !!LOAD(glDisableVertexAttribArray); ok &= !!LOAD(glVertexAttribPointer); ok &= !!LOAD(glDrawArrays);
@@ -168,7 +170,7 @@ typedef struct {
 } Config;
 
 static void load_config(Config *c) {
-    c->port = 7788; strcpy(c->corner, "bl"); c->scale = 1.0f; c->margin = 24; c->flip = 0;
+    c->port = 7788; strcpy(c->corner, "br"); c->scale = 1.0f; c->margin = 24; c->flip = 1;
     const char *base = getenv("XDG_CONFIG_HOME");
     char path[1024];
     if (base && *base) snprintf(path, sizeof path, "%s/tidalfast/gsr-overlay.conf", base);
@@ -193,6 +195,9 @@ static void load_config(Config *c) {
 }
 
 /* ---- state shared between the fetching thread and draw() ---- */
+#define FADE_SECONDS 0.45
+#define SLIDE_PIXELS 14.0f
+
 typedef struct {
     Config cfg;
     unsigned int video_w, video_h;
@@ -205,13 +210,16 @@ typedef struct {
     pthread_mutex_t lock;
     uint8_t *pixels; /* latest card, or NULL when nothing plays */
     unsigned int card_w, card_h;
+    int want;   /* the card should be on screen (something plays) */
+    double alpha;      /* 0..1, eased towards `want` */
+    double last_tick;  /* seconds, when alpha was last moved */
     int fresh;  /* pixels changed since the last upload */
     int damage; /* something visible changed since clear_damage */
 
     /* GL objects, created on the first draw */
     int gl_ready, gl_failed;
     GLuint prog, tex, vbo, vao;
-    GLint loc_pos, loc_uv, loc_tex;
+    GLint loc_pos, loc_uv, loc_tex, loc_alpha;
     unsigned int tex_w, tex_h;
     int visible;
 } Plugin;
@@ -269,15 +277,13 @@ static void *poll_thread(void *arg) {
         if (ok) {
             free(p->pixels);
             p->pixels = px; p->card_w = w; p->card_h = h;
-            p->fresh = 1; p->damage = 1;
-        } else if (p->pixels) {
-            free(p->pixels);
-            p->pixels = NULL;
-            p->damage = 1;
+            p->fresh = 1; p->damage = 1; p->want = 1;
+        } else {
+            p->want = 0; /* paused, nothing playing or tidalfast gone: fade out, keep the last picture */
         }
         pthread_mutex_unlock(&p->lock);
-        for (int i = 0; i < 10 && !p->stop; i++) {
-            struct timespec t = {0, 100 * 1000 * 1000};
+        for (int i = 0; i < 8 && !p->stop; i++) {
+            struct timespec t = {0, 50 * 1000 * 1000};
             nanosleep(&t, NULL);
         }
     }
@@ -315,12 +321,12 @@ static void setup_gl(Plugin *p, gsr_plugin_graphics_api api) {
     fprintf(stderr, "tidalfast overlay: drawing with %s\n", g_api == GSR_PLUGIN_GRAPHICS_API_EGL_ES ? "EGL/GLES" : "GLX");
     static const char *vs_es = "#version 100\nattribute vec2 pos; attribute vec2 uv; varying vec2 v;\n"
         "void main(){ v = uv; gl_Position = vec4(pos, 0.0, 1.0); }\n";
-    static const char *fs_es = "#version 100\nprecision mediump float; varying vec2 v; uniform sampler2D tex;\n"
-        "void main(){ gl_FragColor = texture2D(tex, v); }\n";
+    static const char *fs_es = "#version 100\nprecision mediump float; varying vec2 v; uniform sampler2D tex; uniform float alpha;\n"
+        "void main(){ gl_FragColor = texture2D(tex, v) * alpha; }\n";
     static const char *vs_gl = "#version 120\nattribute vec2 pos; attribute vec2 uv; varying vec2 v;\n"
         "void main(){ v = uv; gl_Position = vec4(pos, 0.0, 1.0); }\n";
-    static const char *fs_gl = "#version 120\nvarying vec2 v; uniform sampler2D tex;\n"
-        "void main(){ gl_FragColor = texture2D(tex, v); }\n";
+    static const char *fs_gl = "#version 120\nvarying vec2 v; uniform sampler2D tex; uniform float alpha;\n"
+        "void main(){ gl_FragColor = texture2D(tex, v) * alpha; }\n";
     int ok = api == GSR_PLUGIN_GRAPHICS_API_EGL_ES ? make_program(p, vs_es, fs_es) : make_program(p, vs_gl, fs_gl);
     if (!ok) ok = make_program(p, vs_es, fs_es);
     if (!ok) ok = make_program(p, vs_gl, fs_gl);
@@ -328,6 +334,7 @@ static void setup_gl(Plugin *p, gsr_plugin_graphics_api api) {
     p->loc_pos = p_glGetAttribLocation(p->prog, "pos");
     p->loc_uv = p_glGetAttribLocation(p->prog, "uv");
     p->loc_tex = p_glGetUniformLocation(p->prog, "tex");
+    p->loc_alpha = p_glGetUniformLocation(p->prog, "alpha");
     p_glGenTextures(1, &p->tex);
     p_glBindTexture(GL_TEXTURE_2D, p->tex);
     p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -342,10 +349,22 @@ static void draw(const gsr_plugin_draw_params *params, void *userdata) {
     Plugin *p = userdata;
     if (p->gl_failed) return;
 
+    /* ease the fade towards the wanted state */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
     pthread_mutex_lock(&p->lock);
-    int have = p->pixels != NULL;
-    if (!have) { pthread_mutex_unlock(&p->lock); return; }
+    double dt = p->last_tick > 0 ? now - p->last_tick : 0;
+    if (dt > 0.1) dt = 0.1; /* recorders may skip frames; don't jump */
+    p->last_tick = now;
+    double target = p->want ? 1.0 : 0.0, step = dt / FADE_SECONDS;
+    if (p->alpha < target) p->alpha = p->alpha + step > target ? target : p->alpha + step;
+    else if (p->alpha > target) p->alpha = p->alpha - step < target ? target : p->alpha - step;
+    double alpha = p->alpha;
+    int have = p->pixels != NULL && alpha > 0.001;
     pthread_mutex_unlock(&p->lock);
+    if (!have) return;
+    double eased = alpha * alpha * (3.0 - 2.0 * alpha); /* smoothstep */
 
     /* remember what we are about to change */
     GLint old_prog, old_buf, old_tex, old_active, old_vao = 0, old_vp[4], bs_rgb, bd_rgb, bs_a, bd_a;
@@ -385,8 +404,12 @@ static void draw(const gsr_plugin_draw_params *params, void *userdata) {
 
     /* quad in pixels (origin bottom left, y up), then to clip space */
     float W = (float)params->width, H = (float)params->height, m = (float)p->cfg.margin * p->card_scale;
+    /* screen position (origin bottom left); the card slides up a little while it fades in */
+    float lift = (1.0f - (float)eased) * SLIDE_PIXELS * p->card_scale;
     float x0 = p->cfg.corner[1] == 'r' ? W - m - cw : m;
-    float y0 = p->cfg.corner[0] == 't' ? H - m - ch : m;
+    float sy0 = (p->cfg.corner[0] == 't' ? H - m - ch : m) - lift;
+    /* when the picture is upside down in GL, mirror the position and the texture */
+    float y0 = p->cfg.flip ? H - sy0 - ch : sy0;
     float x1 = x0 + cw, y1 = y0 + ch;
     /* texture row 0 is the card's top: it goes to the quad's upper edge, or the lower one when flipped */
     float vt = p->cfg.flip ? 1.0f : 0.0f, vb = p->cfg.flip ? 0.0f : 1.0f;
@@ -405,6 +428,7 @@ static void draw(const gsr_plugin_draw_params *params, void *userdata) {
     p_glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     p_glUseProgram(p->prog);
     p_glUniform1i(p->loc_tex, 0);
+    p_glUniform1f(p->loc_alpha, (float)eased);
     p_glBindBuffer(GL_ARRAY_BUFFER, p->vbo);
     p_glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_DYNAMIC_DRAW);
     p_glEnableVertexAttribArray((GLuint)p->loc_pos);
@@ -432,7 +456,7 @@ static void draw(const gsr_plugin_draw_params *params, void *userdata) {
 static bool is_damaged(void *userdata) {
     Plugin *p = userdata;
     pthread_mutex_lock(&p->lock);
-    int d = p->damage;
+    int d = p->damage || p->alpha != (p->want ? 1.0 : 0.0);
     pthread_mutex_unlock(&p->lock);
     return d;
 }

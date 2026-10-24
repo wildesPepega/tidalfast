@@ -64,7 +64,7 @@
   }
   function draw() {
     const now = performance.now();
-    let visible = !!(state && state.active);
+    let visible = !!(state && state.active && state.playing);
     if (visible && hideAfter > 0 && (now - shownAt) / 1000 > hideAfter) visible = false;
     $("card").classList.toggle("on", visible);
     if (visible && state.duration > 0) {

@@ -186,7 +186,7 @@ fn fetch_cover(url: &str) -> Option<image::RgbaImage> {
 /// The card as raw pixels: the size in the headers, premultiplied RGBA in the body.
 fn card_bytes(shared: &Mutex<Shared>, scale: f32) -> Option<(u32, u32, Vec<u8>)> {
     let s = shared.lock().ok()?;
-    if !s.card {
+    if !s.card || !s.playing {
         return None;
     }
     let song = s.song.as_ref()?;

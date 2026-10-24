@@ -87,6 +87,7 @@ enum SettingsTab {
     Equalizer,
     Discord,
     Visualizer,
+    Overlay,
     System,
     Account,
 }
@@ -250,6 +251,7 @@ pub struct App {
     updater: Updater,
     update: UpdateState,
     visualizer: Viz,
+    overlay: crate::overlay::Overlay,
     /// Cover image picked in the edit dialog: file dialog result and preview.
     cover_pick: Option<std::sync::mpsc::Receiver<std::path::PathBuf>>,
     cover_preview: Option<TextureHandle>,
@@ -397,6 +399,7 @@ impl App {
             settings_tab: SettingsTab::Playback,
             lib_click: None,
             visualizer: Viz::new(eq_shared.clone()),
+            overlay: crate::overlay::Overlay::new(),
             updater: Updater::new(cc.egui_ctx.clone()),
             update: UpdateState::default(),
             cover_pick: None,
@@ -1473,6 +1476,20 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Keep the overlay server in step with the setting and with what plays.
+    fn handle_overlay(&mut self) {
+        self.overlay.apply(self.cfg.overlay, self.cfg.overlay_port);
+        let song = self.current.as_ref().map(|t| crate::overlay::Song {
+            id: t.id,
+            title: t.title.clone(),
+            artist: t.artist_name(),
+            album: t.album_title(),
+            cover: t.cover_url(COVER_NOW).unwrap_or_default(),
+            duration: t.duration as f64,
+        });
+        self.overlay.set(song, self.playing && !self.finished, self.position);
     }
 
     /// Keep the visualizer's window going and carry out what its keys ask for.
@@ -3583,6 +3600,7 @@ impl App {
                                         (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer"),
                                         (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord"),
                                         (SettingsTab::Visualizer, icons::WAVEFORM, "Visualizer"),
+                                        (SettingsTab::Overlay, icons::SUBTITLES, "Overlay"),
                                         (SettingsTab::System, icons::DESKTOP, "System"),
                                         (SettingsTab::Account, icons::USER_CIRCLE, "Account"),
                                     ] {
@@ -3793,6 +3811,52 @@ impl App {
                         ui.label(RichText::new(format!("by {}", track.artist_name())).color(TEXT_DIM));
                     });
                 }
+            }
+            SettingsTab::Overlay => {
+                ui.heading("Overlay");
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "Shows what plays (cover, title, artist, progress) in the bottom left corner of a transparent \
+                         web page, for recordings and streams. It only runs on this computer.",
+                    )
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(10.0);
+                let mut on = self.cfg.overlay;
+                if ui.checkbox(&mut on, "Serve the overlay").changed() {
+                    self.cfg.overlay = on;
+                    self.touch();
+                }
+                ui.add_space(6.0);
+                settings_label(ui, "Port");
+                let mut port = self.cfg.overlay_port;
+                if ui.add(egui::DragValue::new(&mut port).range(1024..=65535)).changed() {
+                    self.cfg.overlay_port = port;
+                    self.touch();
+                }
+                ui.add_space(10.0);
+                if let Some(err) = &self.overlay.error {
+                    ui.label(RichText::new(err.clone()).color(egui::Color32::from_rgb(230, 90, 90)));
+                } else if self.overlay.running() {
+                    let url = format!("http://127.0.0.1:{}/", self.cfg.overlay_port);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&url).monospace());
+                        if ui.button("Copy").clicked() {
+                            ui.ctx().copy_text(url.clone());
+                        }
+                    });
+                }
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(
+                        "Add the address as a browser source (OBS: Browser, width and height of your canvas). \
+                         Options in the address: ?scale=1.5 for a bigger card, ?bar=0 without progress bar, \
+                         ?hide=30 hides the card after 30 seconds. /api/now returns the same as JSON.",
+                    )
+                    .size(12.5)
+                    .color(TEXT_DIM),
+                );
             }
             SettingsTab::System => {
                 ui.heading("System");
@@ -4105,6 +4169,7 @@ impl eframe::App for App {
         self.handle_system(ctx);
         self.handle_updates();
         self.handle_visualizer(ctx);
+        self.handle_overlay();
         self.refresh_preload();
         while let Ok(text) = self.link_rx.try_recv() {
             self.open_external(&text);

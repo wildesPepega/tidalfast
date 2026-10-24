@@ -13,6 +13,7 @@ mod ipc;
 mod link;
 mod model;
 mod net;
+mod overlay;
 mod system;
 mod tidal;
 mod transition;

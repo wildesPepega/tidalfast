@@ -34,6 +34,9 @@ pub struct Settings {
     pub viz_quality: u8,
     pub viz_beat_cuts: bool,
     pub viz_sensitivity: f32,
+    /// Serve the now-playing overlay page on localhost, and the port for it.
+    pub overlay: bool,
+    pub overlay_port: u16,
     /// Look for a new version at startup (and every few hours).
     pub check_updates: bool,
     /// Download and install new versions without asking.
@@ -83,6 +86,8 @@ impl Default for Settings {
             viz_quality: 1,
             viz_beat_cuts: false,
             viz_sensitivity: 1.0,
+            overlay: false,
+            overlay_port: 7788,
             check_updates: true,
             auto_update: false,
             close_to_tray: false,

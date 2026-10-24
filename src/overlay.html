@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tidalfast overlay</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --scale: 1; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif; }
+  #card { position: fixed; left: calc(24px * var(--scale)); bottom: calc(24px * var(--scale));
+    display: flex; gap: calc(14px * var(--scale)); align-items: center;
+    width: calc(380px * var(--scale)); box-sizing: border-box; padding: calc(12px * var(--scale));
+    border-radius: calc(16px * var(--scale)); color: #fff;
+    background: rgba(12, 14, 18, .78); backdrop-filter: blur(10px);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+    opacity: 0; transform: translateY(12px); transition: opacity .5s, transform .5s; }
+  #card.on { opacity: 1; transform: none; }
+  #cover { width: calc(72px * var(--scale)); height: calc(72px * var(--scale)); flex: none;
+    border-radius: calc(10px * var(--scale)); object-fit: cover; background: #222; }
+  #text { min-width: 0; flex: 1; }
+  #title { font-weight: 700; font-size: calc(17px * var(--scale)); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  #artist { margin-top: 2px; font-size: calc(14px * var(--scale)); color: #c4c9d4; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  #bar { margin-top: calc(10px * var(--scale)); height: calc(4px * var(--scale)); border-radius: 4px;
+    background: rgba(255, 255, 255, .18); overflow: hidden; }
+  #fill { height: 100%; width: 0; background: #fff; border-radius: 4px; }
+  body.nobar #bar { display: none; }
+</style>
+</head>
+<body>
+<div id="card">
+  <img id="cover" alt="" onerror="this.style.visibility='hidden'" onload="this.style.visibility='visible'">
+  <div id="text">
+    <div id="title"></div>
+    <div id="artist"></div>
+    <div id="bar"><div id="fill"></div></div>
+  </div>
+</div>
+<script>
+  // ?scale=1.5 enlarges everything, ?bar=0 hides the progress bar,
+  // ?hide=30 hides the card after 30 s of the same song (0 = never).
+  const q = new URLSearchParams(location.search);
+  document.documentElement.style.setProperty("--scale", Math.min(4, Math.max(.4, parseFloat(q.get("scale")) || 1)));
+  if (q.get("bar") === "0") document.body.classList.add("nobar");
+  const hideAfter = parseFloat(q.get("hide")) || 0;
+  const $ = id => document.getElementById(id);
+  let last = null, shownAt = 0, state = null, got = 0;
+
+  async function poll() {
+    try {
+      const r = await fetch("/api/now", { cache: "no-store" });
+      state = await r.json();
+      got = performance.now();
+      if (state.active && state.id !== last) {
+        last = state.id; shownAt = got;
+        $("title").textContent = state.title;
+        $("artist").textContent = state.artist;
+        $("cover").src = state.cover || "";
+      }
+      if (!state.active) last = null;
+    } catch (e) { state = null; }
+  }
+  function draw() {
+    const now = performance.now();
+    let visible = !!(state && state.active);
+    if (visible && hideAfter > 0 && (now - shownAt) / 1000 > hideAfter) visible = false;
+    $("card").classList.toggle("on", visible);
+    if (visible && state.duration > 0) {
+      const pos = state.position + (state.playing ? (now - got) / 1000 : 0);
+      $("fill").style.width = Math.min(100, 100 * pos / state.duration) + "%";
+    }
+    requestAnimationFrame(draw);
+  }
+  poll(); setInterval(poll, 1000); draw();
+</script>
+</body>
+</html>

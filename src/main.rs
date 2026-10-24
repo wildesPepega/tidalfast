@@ -4,6 +4,7 @@
 mod app;
 mod audio;
 mod cache;
+mod card;
 mod config;
 mod desktop;
 mod discord;

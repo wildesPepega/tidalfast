@@ -4335,6 +4335,7 @@ dependencies = [
 name = "tidalfast"
 version = "0.4.3"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "base64 0.22.1",
  "cpal",

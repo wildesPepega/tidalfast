@@ -3850,6 +3850,15 @@ impl App {
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(
+                        "GPU Screen Recorder (Linux): the plugin in the gsr-plugin folder of the source code draws the \
+                         card into the recording. Run gsr-plugin/install.sh once, then record as usual.",
+                    )
+                    .size(12.5)
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
                         "Add the address as a browser source (OBS: Browser, width and height of your canvas). \
                          Options in the address: ?scale=1.5 for a bigger card, ?bar=0 without progress bar, \
                          ?hide=30 hides the card after 30 seconds. /api/now returns the same as JSON.",

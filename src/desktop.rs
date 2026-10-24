@@ -9,7 +9,19 @@ pub const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 fn launcher_path() -> Option<std::path::PathBuf> {
     match std::env::var_os("APPIMAGE") {
         Some(p) if cfg!(target_os = "linux") => Some(p.into()),
-        _ => std::env::current_exe().ok(),
+        _ => current_exe(),
+    }
+}
+
+/// Path of the running executable. On Linux, `current_exe` appends
+/// " (deleted)" when the file was replaced while running (an install over a
+/// running instance); that suffix is not part of the path.
+pub fn current_exe() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let text = exe.to_string_lossy();
+    match text.strip_suffix(" (deleted)") {
+        Some(p) => Some(p.into()),
+        None => Some(exe),
     }
 }
 

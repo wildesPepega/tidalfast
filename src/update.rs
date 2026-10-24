@@ -165,7 +165,7 @@ fn asset_name() -> Option<&'static str> {
 fn target_path() -> Result<PathBuf> {
     match std::env::var_os("APPIMAGE") {
         Some(p) if cfg!(target_os = "linux") => Ok(PathBuf::from(p)),
-        _ => std::env::current_exe().context("Could not locate the running program"),
+        _ => crate::desktop::current_exe().context("Could not locate the running program"),
     }
 }
 

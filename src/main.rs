@@ -18,6 +18,7 @@ mod tidal;
 mod transition;
 mod ui;
 mod update;
+mod viz;
 
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,tidalfast=info")).init();
@@ -32,7 +33,8 @@ fn main() -> eframe::Result<()> {
     // `tidalfast <spotify/tidal link>`: hand over to a running instance if there is one.
     let link_arg = std::env::args().skip(1).find(|a| link::parse(a).is_some());
     // screenshot runs (debug builds) stay out of a running instance's way
-    let screenshot = cfg!(debug_assertions) && std::env::var_os("TIDALFAST_SHOT").is_some();
+    let screenshot = cfg!(debug_assertions)
+        && (std::env::var_os("TIDALFAST_SHOT").is_some() || std::env::var_os("TIDALFAST_VIZ_SHOT").is_some());
     if !screenshot {
         if ipc::forward(link_arg.as_deref().unwrap_or("focus")) {
             return Ok(());

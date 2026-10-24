@@ -24,6 +24,7 @@ No Electron, no web view, just a small binary.</p>
 - **Media keys and desktop media controls:** play/pause/next/previous/seek from your keyboard and from the media widgets of your desktop (MPRIS on Linux: KDE, GNOME, Waybar's `mpris` module, `playerctl`; System Media Transport Controls on Windows). Shows title, artist and cover.
 - **Tray icon:** StatusNotifierItem on Linux (KDE, Waybar, XFCE, … and GNOME with the AppIndicator extension), notification-area icon on Windows. Left click shows/hides the window, the menu has play/pause, next, previous and quit. Optionally keeps running in the tray when you close the window. Media keys and tray are configured in *Settings → System*.
 - **Updates:** checks GitHub for new releases (at startup and every few hours) and can download, verify (SHA-256) and install them itself, for the Linux binary, the AppImage and Windows; *Settings → System → Updates* has a switch for the check and for automatic installation.
+- **Visualizer:** a MilkDrop-style, music-reactive picture written in Rust (OpenGL) in a window of its own, with fullscreen. It reacts to bass, mids, treble and the beat, has a dozen built-in presets plus endless random ones that melt into each other, and shows the playing song. Open it with the waveform button in the player bar or the `V` key; presets, quality and beat sensitivity are in *Settings → Visualizer*.
 - **Output device selection** (PipeWire/PulseAudio sinks on Linux, WASAPI devices on Windows).
 - **Single instance:** starting tidalfast again focuses the running window.
 - Keyboard shortcuts: `Space` play/pause, `Ctrl+→/←` next/previous, `→/←` seek ±10 s, `↑/↓` volume, `M` mute, `Ctrl+F` or `/` search.
@@ -79,6 +80,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 | `src/eq.rs` | Equalizer and spectrum analysis |
 | `src/discord.rs` | Discord Rich Presence worker |
 | `src/import.rs`, `src/link.rs` | Spotify import and Spotify/TIDAL link parsing |
+| `src/viz/` | The visualizer: audio analysis and beat detection, presets, geometry and the OpenGL renderer |
 | `src/system.rs` | Media keys / MPRIS / Windows media controls and the tray icon |
 | `src/ipc.rs`, `src/desktop.rs` | Single instance and Linux desktop integration |
 | `src/config.rs`, `src/cache.rs`, `src/model.rs` | Settings, on-disk cache and data types |

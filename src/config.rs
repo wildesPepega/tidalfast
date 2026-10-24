@@ -29,6 +29,11 @@ pub struct Settings {
     pub tray: bool,
     /// Handle `spotify:` and `tidal:` links (browsers offer to open them in tidalfast).
     pub link_handler: bool,
+    /// Visualizer: seconds per preset, render quality (0‥2), hard cuts on the beat, beat sensitivity.
+    pub viz_seconds: u32,
+    pub viz_quality: u8,
+    pub viz_beat_cuts: bool,
+    pub viz_sensitivity: f32,
     /// Look for a new version at startup (and every few hours).
     pub check_updates: bool,
     /// Download and install new versions without asking.
@@ -74,6 +79,10 @@ impl Default for Settings {
             media_keys: true,
             tray: false,
             link_handler: true,
+            viz_seconds: 15,
+            viz_quality: 1,
+            viz_beat_cuts: false,
+            viz_sensitivity: 1.0,
             check_updates: true,
             auto_update: false,
             close_to_tray: false,

@@ -478,6 +478,7 @@ pub enum Icon {
     /// Repeat; `true` when repeating a single track.
     Repeat(bool),
     Queue,
+    Visualizer,
 }
 
 /// A flat transport icon button.
@@ -498,6 +499,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, active: bool) -> Response
         Icon::Repeat(true) => (icons::REPEAT_ONCE, bold_family()),
         Icon::Repeat(false) => (icons::REPEAT, bold_family()),
         Icon::Queue => (icons::QUEUE, bold_family()),
+        Icon::Visualizer => (icons::WAVEFORM, bold_family()),
     };
     paint_icon(ui.painter(), rect.center(), glyph, size * 0.68, color, family);
     resp

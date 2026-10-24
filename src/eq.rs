@@ -12,7 +12,7 @@
 //! thread. [`EqShared`] is the lock-light bridge to the UI.
 
 use std::f64::consts::PI;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -434,6 +434,8 @@ pub struct EqShared {
     peak: AtomicU32,
     reduction: AtomicU32,
     spectrum: Mutex<[f32; SPEC_BINS]>,
+    /// The visualizer's view of the sound: switched on only while it is open.
+    tap: Tap,
 }
 
 impl EqShared {
@@ -445,6 +447,7 @@ impl EqShared {
             peak: AtomicU32::new(0),
             reduction: AtomicU32::new(0),
             spectrum: Mutex::new([0.0; SPEC_BINS]),
+            tap: Tap::default(),
         })
     }
 
@@ -474,12 +477,64 @@ impl EqShared {
         self.spectrum.lock().map(|s| *s).unwrap_or([-100.0; SPEC_BINS])
     }
 
+    /// Start or stop copying the sound for the visualizer.
+    pub fn set_tap(&self, on: bool) {
+        self.tap.on.store(on, Ordering::Relaxed);
+        if !on {
+            if let Ok(mut ring) = self.tap.ring.lock() {
+                ring.written = 0;
+            }
+        }
+    }
+
+    /// The newest `frames` stereo frames (interleaved L, R), ending `lag`
+    /// frames before the latest one. False if the tap has less than that.
+    pub fn read_tap(&self, frames: usize, lag: usize, out: &mut Vec<f32>) -> bool {
+        let Ok(ring) = self.tap.ring.lock() else { return false };
+        let capacity = TAP_FRAMES;
+        if ring.written < frames + lag || frames + lag > capacity {
+            return false;
+        }
+        out.clear();
+        let end = ring.written - lag;
+        for frame in end - frames..end {
+            let i = (frame % capacity) * 2;
+            out.push(ring.data[i]);
+            out.push(ring.data[i + 1]);
+        }
+        true
+    }
+
     pub fn clear_meters(&self) {
         self.peak.store(0, Ordering::Relaxed);
         self.reduction.store(0, Ordering::Relaxed);
         if let Ok(mut s) = self.spectrum.lock() {
             *s = [-100.0; SPEC_BINS];
         }
+    }
+}
+
+// ----------------------------------------------------------------------- tap
+
+/// Frames the tap keeps: about 0.37 s at 44.1 kHz.
+const TAP_FRAMES: usize = 16_384;
+
+#[derive(Default)]
+struct Tap {
+    on: AtomicBool,
+    ring: Mutex<TapRing>,
+}
+
+struct TapRing {
+    /// Interleaved L, R.
+    data: Vec<f32>,
+    /// Frames written in total.
+    written: usize,
+}
+
+impl Default for TapRing {
+    fn default() -> Self {
+        Self { data: vec![0.0; TAP_FRAMES * 2], written: 0 }
     }
 }
 
@@ -695,6 +750,8 @@ pub struct EqSource<S> {
     meter_hold: f32,
     meter_count: u32,
     done: bool,
+    /// Stereo frames waiting to be handed to the tap.
+    tap_buf: Vec<f32>,
 }
 
 impl<S: Source> EqSource<S> {
@@ -728,6 +785,7 @@ impl<S: Source> EqSource<S> {
             meter_hold: 0.0,
             meter_count: 0,
             done: false,
+            tap_buf: Vec::new(),
         };
         // Start directly at the configured state — no ramp on the first frame.
         source.filters = (0..channels)
@@ -831,6 +889,13 @@ impl<S: Source> EqSource<S> {
             mono += *s;
         }
         self.analyzer.push(mono / self.channels as f32, &self.shared);
+        if self.shared.tap.on.load(Ordering::Relaxed) {
+            let (l, r) = (self.frame[0], self.frame[self.channels.min(2) - 1]);
+            self.tap_buf.extend_from_slice(&[l, r]);
+            if self.tap_buf.len() >= 1024 {
+                self.flush_tap();
+            }
+        }
         self.meter_peak = self.meter_peak.max(peak);
         self.meter_count += 1;
         if self.meter_count >= 1024 {
@@ -850,6 +915,24 @@ impl<S: Source> EqSource<S> {
 
 fn db_to_lin(db: f32) -> f64 {
     10f64.powf(db as f64 / 20.0)
+}
+
+impl<S: Source> EqSource<S> {
+    /// Hand the collected frames to the tap. If the visualizer is reading
+    /// right now they stay here for the next try: the audio thread never waits.
+    fn flush_tap(&mut self) {
+        if let Ok(mut ring) = self.shared.tap.ring.try_lock() {
+            for pair in self.tap_buf.chunks_exact(2) {
+                let i = (ring.written % TAP_FRAMES) * 2;
+                ring.data[i] = pair[0];
+                ring.data[i + 1] = pair[1];
+                ring.written += 1;
+            }
+            self.tap_buf.clear();
+        } else if self.tap_buf.len() > 16_384 {
+            self.tap_buf.clear();
+        }
+    }
 }
 
 impl<S: Source> Iterator for EqSource<S> {

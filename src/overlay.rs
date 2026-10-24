@@ -29,6 +29,8 @@ struct Shared {
     playing: bool,
     position: f64,
     at: Option<Instant>,
+    /// Whether `/card.rgba` hands out the card (the recorder plugin).
+    card: bool,
     /// The cover being fetched or fetched (url, picture once it arrived).
     cover: Option<(String, Option<image::RgbaImage>)>,
 }
@@ -69,6 +71,12 @@ impl Overlay {
                 self.error = None;
             }
             Err(e) => self.error = Some(format!("Port {port}: {e}")),
+        }
+    }
+
+    pub fn set_card(&self, on: bool) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.card = on;
         }
     }
 
@@ -178,6 +186,9 @@ fn fetch_cover(url: &str) -> Option<image::RgbaImage> {
 /// The card as raw pixels: the size in the headers, premultiplied RGBA in the body.
 fn card_bytes(shared: &Mutex<Shared>, scale: f32) -> Option<(u32, u32, Vec<u8>)> {
     let s = shared.lock().ok()?;
+    if !s.card {
+        return None;
+    }
     let song = s.song.as_ref()?;
     let mut position = s.position;
     if s.playing {
@@ -243,6 +254,7 @@ mod tests {
     #[test]
     fn serves_page_and_state() {
         let mut o = Overlay::new();
+        o.set_card(true);
         o.apply(true, 47231);
         assert!(o.running(), "{:?}", o.error);
         assert!(get(47231, "/").contains("<title>"));

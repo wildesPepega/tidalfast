@@ -1481,6 +1481,7 @@ impl App {
     /// Keep the overlay server in step with the setting and with what plays.
     fn handle_overlay(&mut self) {
         self.overlay.apply(self.cfg.overlay, self.cfg.overlay_port);
+        self.overlay.set_card(self.cfg.overlay_recording);
         let song = self.current.as_ref().map(|t| crate::overlay::Song {
             id: t.id,
             title: t.title.clone(),
@@ -3826,6 +3827,11 @@ impl App {
                 let mut on = self.cfg.overlay;
                 if ui.checkbox(&mut on, "Serve the overlay").changed() {
                     self.cfg.overlay = on;
+                    self.touch();
+                }
+                let mut recording = self.cfg.overlay_recording;
+                if ui.checkbox(&mut recording, "Show it in GPU Screen Recorder recordings (needs the plugin)").changed() {
+                    self.cfg.overlay_recording = recording;
                     self.touch();
                 }
                 ui.add_space(6.0);

@@ -37,6 +37,8 @@ pub struct Settings {
     /// Serve the now-playing overlay page on localhost, and the port for it.
     pub overlay: bool,
     pub overlay_port: u16,
+    /// Offer the card to the GPU Screen Recorder plugin.
+    pub overlay_recording: bool,
     /// Look for a new version at startup (and every few hours).
     pub check_updates: bool,
     /// Download and install new versions without asking.
@@ -88,6 +90,7 @@ impl Default for Settings {
             viz_sensitivity: 1.0,
             overlay: false,
             overlay_port: 7788,
+            overlay_recording: true,
             check_updates: true,
             auto_update: false,
             close_to_tray: false,

@@ -252,6 +252,8 @@ pub struct App {
     update: UpdateState,
     visualizer: Viz,
     overlay: crate::overlay::Overlay,
+    #[cfg(target_os = "linux")]
+    gsr_status: Option<String>,
     /// Cover image picked in the edit dialog: file dialog result and preview.
     cover_pick: Option<std::sync::mpsc::Receiver<std::path::PathBuf>>,
     cover_preview: Option<TextureHandle>,
@@ -400,6 +402,8 @@ impl App {
             lib_click: None,
             visualizer: Viz::new(eq_shared.clone()),
             overlay: crate::overlay::Overlay::new(),
+            #[cfg(target_os = "linux")]
+            gsr_status: None,
             updater: Updater::new(cc.egui_ctx.clone()),
             update: UpdateState::default(),
             cover_pick: None,
@@ -3837,10 +3841,13 @@ impl App {
                     self.cfg.overlay = on;
                     self.touch();
                 }
-                let mut recording = self.cfg.overlay_recording;
-                if ui.checkbox(&mut recording, "Show it in GPU Screen Recorder recordings (needs the plugin)").changed() {
-                    self.cfg.overlay_recording = recording;
-                    self.touch();
+                #[cfg(target_os = "linux")]
+                {
+                    let mut recording = self.cfg.overlay_recording;
+                    if ui.checkbox(&mut recording, "Show it in GPU Screen Recorder recordings").changed() {
+                        self.cfg.overlay_recording = recording;
+                        self.touch();
+                    }
                 }
                 ui.add_space(6.0);
                 settings_label(ui, "Port");
@@ -3861,15 +3868,39 @@ impl App {
                         }
                     });
                 }
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(
-                        "GPU Screen Recorder (Linux): the plugin in the gsr-plugin folder of the source code draws the \
-                         card into the recording. Run gsr-plugin/install.sh once, then record as usual.",
-                    )
-                    .size(12.5)
-                    .color(TEXT_DIM),
-                );
+                #[cfg(target_os = "linux")]
+                {
+                    ui.add_space(10.0);
+                    settings_label(ui, "GPU Screen Recorder");
+                    ui.label(
+                        RichText::new(
+                            "A plugin draws the card into the corner of your recordings and replays (bottom right, only \
+                             while music plays). Install it once, then restart the recorder.",
+                        )
+                        .size(12.5)
+                        .color(TEXT_DIM),
+                    );
+                    ui.add_space(4.0);
+                    let installed = crate::desktop::gsr_plugin_installed();
+                    ui.horizontal(|ui| {
+                        let label = if installed { "Reinstall plugin" } else { "Install plugin" };
+                        if action_button(ui, icons::DOWNLOAD_SIMPLE, label, !installed).clicked() {
+                            self.gsr_status = Some(match crate::desktop::install_gsr_plugin() {
+                                Ok(msg) => msg,
+                                Err(e) => format!("Failed: {e}"),
+                            });
+                        }
+                        if installed && action_button(ui, icons::TRASH, "Remove", false).clicked() {
+                            crate::desktop::remove_gsr_plugin();
+                            self.gsr_status = Some("Removed.".into());
+                        }
+                    });
+                    if let Some(status) = &self.gsr_status {
+                        ui.label(RichText::new(status.clone()).size(12.5));
+                    } else if installed {
+                        ui.label(RichText::new("Installed.").size(12.5).color(TEXT_DIM));
+                    }
+                }
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(

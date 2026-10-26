@@ -1503,7 +1503,7 @@ impl App {
             api: self.cfg.overlay_api,
             card: cfg!(target_os = "linux") && self.cfg.overlay_recording,
         };
-        self.overlay.apply(features.any(), self.cfg.overlay_port);
+        self.overlay.apply(features.any(), self.cfg.overlay_port, self.cfg.overlay_lan);
         self.overlay.set_features(features);
         let song = self.current.as_ref().map(|t| crate::overlay::Song {
             now: overlay_brief(t),
@@ -3860,6 +3860,21 @@ impl App {
                         self.cfg.overlay_recording = recording;
                         self.touch();
                     }
+                }
+                let mut lan = self.cfg.overlay_lan;
+                if ui.checkbox(&mut lan, "Reachable from other devices (listen on 0.0.0.0)").changed() {
+                    self.cfg.overlay_lan = lan;
+                    self.touch();
+                }
+                if self.cfg.overlay_lan {
+                    ui.label(
+                        RichText::new(
+                            "Anyone on your network can see what you play. Use this computer's address instead of \
+                             127.0.0.1 from other devices; your firewall may need to allow the port.",
+                        )
+                        .size(12.5)
+                        .color(TEXT_DIM),
+                    );
                 }
                 ui.add_space(6.0);
                 settings_label(ui, "Port");

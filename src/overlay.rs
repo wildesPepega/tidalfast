@@ -1,6 +1,6 @@
 //! Optional "now playing" overlay for streaming and recording.
 //!
-//! A tiny HTTP server on localhost with three independent parts:
+//! A tiny HTTP server (localhost, or all interfaces if asked) with three independent parts:
 //! - the overlay page (`/`): a transparent card for a browser source,
 //! - the API (`/api/now`, `/api/cover`): what plays now and next, as JSON,
 //! - the card as pixels (`/card.rgba`) for the recorder plugin.
@@ -92,7 +92,7 @@ struct Shared {
 /// The running server (or nothing, while the overlay is off).
 pub struct Overlay {
     shared: Arc<Mutex<Shared>>,
-    server: Option<(u16, Arc<AtomicBool>)>,
+    server: Option<(u16, bool, Arc<AtomicBool>)>,
     /// Why the last start failed.
     pub error: Option<String>,
 }
@@ -103,25 +103,38 @@ impl Overlay {
     }
 
     /// Start, stop or move the server so it matches the setting.
-    pub fn apply(&mut self, enabled: bool, port: u16) {
-        if let Some((running, stop)) = &self.server {
-            if enabled && *running == port {
+    /// `all_interfaces`: listen on 0.0.0.0 (other devices can connect) instead of 127.0.0.1.
+    pub fn apply(&mut self, enabled: bool, port: u16, all_interfaces: bool) {
+        let mut restarting = false;
+        if let Some((running, wide, stop)) = &self.server {
+            if enabled && *running == port && *wide == all_interfaces {
                 return;
             }
             stop.store(true, Ordering::Relaxed);
             self.server = None;
+            restarting = true;
         }
         if !enabled {
             self.error = None;
             return;
         }
-        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        match TcpListener::bind(addr).and_then(|l| l.set_nonblocking(true).map(|_| l)) {
+        let host = if all_interfaces { Ipv4Addr::UNSPECIFIED } else { Ipv4Addr::LOCALHOST };
+        let addr = SocketAddr::from((host, port));
+        let mut bound = TcpListener::bind(addr);
+        // the old server lets go of its port within a moment
+        for _ in 0..4 {
+            if !restarting || bound.is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(60));
+            bound = TcpListener::bind(addr);
+        }
+        match bound.and_then(|l| l.set_nonblocking(true).map(|_| l)) {
             Ok(listener) => {
                 let stop = Arc::new(AtomicBool::new(false));
                 let (shared, flag) = (self.shared.clone(), stop.clone());
                 std::thread::spawn(move || serve(listener, shared, flag));
-                self.server = Some((port, stop));
+                self.server = Some((port, all_interfaces, stop));
                 self.error = None;
             }
             Err(e) => self.error = Some(format!("Port {port}: {e}")),
@@ -169,7 +182,7 @@ impl Overlay {
 
 impl Drop for Overlay {
     fn drop(&mut self) {
-        if let Some((_, stop)) = &self.server {
+        if let Some((_, _, stop)) = &self.server {
             stop.store(true, Ordering::Relaxed);
         }
     }
@@ -336,7 +349,7 @@ mod tests {
     fn serves_page_api_and_card_independently() {
         let mut o = Overlay::new();
         o.set_features(Features { page: true, api: true, card: true });
-        o.apply(true, 47231);
+        o.apply(true, 47231, false);
         assert!(o.running(), "{:?}", o.error);
         assert!(get(47231, "/").contains("<title>"));
         assert!(get(47231, "/api/now").contains("\"active\":false"));
@@ -360,7 +373,7 @@ mod tests {
         assert!(get(47231, "/api/now").contains("switched off"));
         assert!(get(47231, "/overlay.json").contains("\"title\":\"T\""));
 
-        o.apply(false, 47231);
+        o.apply(false, 47231, false);
         std::thread::sleep(Duration::from_millis(300));
         assert!(TcpStream::connect(("127.0.0.1", 47231)).is_err());
     }
@@ -370,7 +383,7 @@ mod tests {
     fn serves_the_cover() {
         let mut o = Overlay::new();
         o.set_features(Features { page: false, api: true, card: false });
-        o.apply(true, 47232);
+        o.apply(true, 47232, false);
         let mut b = brief(1, "T");
         b.cover = "https://resources.tidal.com/images/bdc3106f/c00d/4ff6/8df2/7139ec2ca491/320x320.jpg".into();
         o.set(Some(Song { now: b, next: None }), true, 0.0);
@@ -381,5 +394,25 @@ mod tests {
             std::thread::sleep(Duration::from_millis(250));
         }
         panic!("no cover");
+    }
+
+    #[test]
+    fn listens_on_all_interfaces_only_when_asked() {
+        // this computer's address on the network (skip where there is none)
+        let lan = std::net::UdpSocket::bind("0.0.0.0:0")
+            .and_then(|u| u.connect("192.0.2.1:9").map(|_| u))
+            .and_then(|u| u.local_addr())
+            .map(|a| a.ip());
+        let Ok(lan) = lan.map(|ip| ip.to_string()) else { return };
+        if lan.starts_with("127.") {
+            return;
+        }
+        let mut o = Overlay::new();
+        o.set_features(Features { page: true, api: false, card: false });
+        o.apply(true, 47233, false);
+        assert!(TcpStream::connect((lan.as_str(), 47233)).is_err(), "closed to the network by default");
+        o.apply(true, 47233, true);
+        assert!(TcpStream::connect((lan.as_str(), 47233)).is_ok(), "open on {lan}");
+        assert!(TcpStream::connect(("127.0.0.1", 47233)).is_ok());
     }
 }

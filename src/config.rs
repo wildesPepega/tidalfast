@@ -37,6 +37,8 @@ pub struct Settings {
     /// Serve the now-playing overlay page on localhost, and the port for it.
     pub overlay: bool,
     pub overlay_port: u16,
+    /// Listen on 0.0.0.0 so other devices on the network can reach the overlay and API.
+    pub overlay_lan: bool,
     /// Serve the JSON API (`/api/now`, `/api/cover`).
     pub overlay_api: bool,
     /// Offer the card to the GPU Screen Recorder plugin.
@@ -92,6 +94,7 @@ impl Default for Settings {
             viz_sensitivity: 1.0,
             overlay: false,
             overlay_port: 7788,
+            overlay_lan: false,
             overlay_api: false,
             overlay_recording: false,
             check_updates: true,

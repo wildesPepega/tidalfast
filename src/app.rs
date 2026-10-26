@@ -94,6 +94,20 @@ enum SettingsTab {
 
 const LIKED_UUID: &str = "liked";
 
+/// A track as the overlay API describes it.
+fn overlay_brief(t: &Track) -> crate::overlay::Brief {
+    crate::overlay::Brief {
+        id: t.id,
+        title: t.title.clone(),
+        artist: t.artist_name(),
+        artists: t.artist_list().iter().map(|a| a.name.clone()).collect(),
+        album: t.album_title(),
+        cover: t.cover_url(COVER_NOW).unwrap_or_default(),
+        duration: t.duration as f64,
+        url: t.url.clone().unwrap_or_else(|| format!("https://tidal.com/browse/track/{}", t.id)),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PlAction {
     Open,
@@ -1484,23 +1498,16 @@ impl App {
 
     /// Keep the overlay server in step with the setting and with what plays.
     fn handle_overlay(&mut self) {
-        self.overlay.apply(self.cfg.overlay, self.cfg.overlay_port);
-        self.overlay.set_card(self.cfg.overlay_recording);
+        let features = crate::overlay::Features {
+            page: self.cfg.overlay,
+            api: self.cfg.overlay_api,
+            card: cfg!(target_os = "linux") && self.cfg.overlay_recording,
+        };
+        self.overlay.apply(features.any(), self.cfg.overlay_port);
+        self.overlay.set_features(features);
         let song = self.current.as_ref().map(|t| crate::overlay::Song {
-            id: t.id,
-            title: t.title.clone(),
-            artist: t.artist_name(),
-            album: t.album_title(),
-            cover: t.cover_url(COVER_NOW).unwrap_or_default(),
-            duration: t.duration as f64,
-            next: self
-                .peek_next()
-                .and_then(|(i, _)| self.queue.get(i))
-                .map(|n| match n.artist_name() {
-                    a if a.is_empty() => n.title.clone(),
-                    a => format!("{} — {}", n.title, a),
-                })
-                .unwrap_or_default(),
+            now: overlay_brief(t),
+            next: self.peek_next().and_then(|(i, _)| self.queue.get(i)).map(overlay_brief),
         });
         self.overlay.set(song, self.playing && !self.finished, self.position);
     }
@@ -3837,8 +3844,13 @@ impl App {
                 );
                 ui.add_space(10.0);
                 let mut on = self.cfg.overlay;
-                if ui.checkbox(&mut on, "Serve the overlay").changed() {
+                if ui.checkbox(&mut on, "Overlay web page (browser source)").changed() {
                     self.cfg.overlay = on;
+                    self.touch();
+                }
+                let mut api = self.cfg.overlay_api;
+                if ui.checkbox(&mut api, "API (JSON: now playing, next track, cover, progress)").changed() {
+                    self.cfg.overlay_api = api;
                     self.touch();
                 }
                 #[cfg(target_os = "linux")]
@@ -3860,13 +3872,22 @@ impl App {
                 if let Some(err) = &self.overlay.error {
                     ui.label(RichText::new(err.clone()).color(egui::Color32::from_rgb(230, 90, 90)));
                 } else if self.overlay.running() {
-                    let url = format!("http://127.0.0.1:{}/", self.cfg.overlay_port);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&url).monospace());
-                        if ui.button("Copy").clicked() {
-                            ui.ctx().copy_text(url.clone());
-                        }
-                    });
+                    let base = format!("http://127.0.0.1:{}", self.cfg.overlay_port);
+                    let mut urls = Vec::new();
+                    if self.cfg.overlay {
+                        urls.push(format!("{base}/"));
+                    }
+                    if self.cfg.overlay_api {
+                        urls.push(format!("{base}/api/now"));
+                    }
+                    for url in urls {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&url).monospace());
+                            if ui.button("Copy").clicked() {
+                                ui.ctx().copy_text(url.clone());
+                            }
+                        });
+                    }
                 }
                 #[cfg(target_os = "linux")]
                 {
@@ -3886,7 +3907,11 @@ impl App {
                         let label = if installed { "Reinstall plugin" } else { "Install plugin" };
                         if action_button(ui, icons::DOWNLOAD_SIMPLE, label, !installed).clicked() {
                             self.gsr_status = Some(match crate::desktop::install_gsr_plugin() {
-                                Ok(msg) => msg,
+                                Ok(msg) => {
+                                    self.cfg.overlay_recording = true;
+                                    self.touch();
+                                    msg
+                                }
                                 Err(e) => format!("Failed: {e}"),
                             });
                         }
@@ -3904,9 +3929,19 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(
+                        "API, read-only, for scripts and widgets: GET /api/now returns {playing, position, duration, \
+                         progress, track, next} (each track with id, title, artist, artists, album, duration, cover, \
+                         url); GET /api/cover returns the current cover picture.",
+                    )
+                    .size(12.5)
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
                         "Add the address as a browser source (OBS: Browser, width and height of your canvas). \
                          Options in the address: ?scale=1.5 for a bigger card, ?bar=0 without progress bar, \
-                         ?hide=30 hides the card after 30 seconds. /api/now returns the same as JSON.",
+                         ?hide=30 hides the card after 30 seconds.",
                     )
                     .size(12.5)
                     .color(TEXT_DIM),

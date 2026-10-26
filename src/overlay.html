@@ -56,18 +56,19 @@
 
   async function poll() {
     try {
-      const r = await fetch("/api/now", { cache: "no-store" });
+      const r = await fetch("/overlay.json", { cache: "no-store" });
       state = await r.json();
       got = performance.now();
-      if (state.active && state.id !== last) {
-        last = state.id; shownAt = got;
-        $("title").textContent = state.title;
-        $("artist").textContent = state.artist;
-        $("cover").src = state.cover || "";
+      if (state.active && state.track.id !== last) {
+        last = state.track.id; shownAt = got;
+        $("title").textContent = state.track.title;
+        $("artist").textContent = state.track.artist;
+        $("cover").src = state.track.cover || "";
       }
       if (state.active) {
-        $("next").textContent = state.next ? "NEXT  " + state.next : "";
-        $("card").classList.toggle("hasnext", !!state.next);
+        const n = state.next;
+        $("next").textContent = n ? "NEXT  " + n.title + (n.artist ? " — " + n.artist : "") : "";
+        $("card").classList.toggle("hasnext", !!n);
       }
       if (!state.active) last = null;
     } catch (e) { state = null; }

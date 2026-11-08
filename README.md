@@ -7,6 +7,29 @@ No Electron, no web view, just a small binary.</p>
 
 > **Unofficial.** tidalfast is not affiliated with, endorsed by or connected to TIDAL. "TIDAL" and the TIDAL logo are trademarks of their respective owners. You need your own TIDAL subscription.
 
+## Screenshots
+
+<p align="center">
+  <a href="docs/screenshots/home.jpg"><img src="docs/screenshots/home.jpg" width="49%" alt="Home with mixes and playlists"></a>
+  <a href="docs/screenshots/playlist.jpg"><img src="docs/screenshots/playlist.jpg" width="49%" alt="A playlist"></a>
+  <a href="docs/screenshots/now-playing.jpg"><img src="docs/screenshots/now-playing.jpg" width="49%" alt="Full-screen player with synced lyrics"></a>
+  <a href="docs/screenshots/queue.jpg"><img src="docs/screenshots/queue.jpg" width="49%" alt="Queue"></a>
+  <a href="docs/screenshots/search.jpg"><img src="docs/screenshots/search.jpg" width="49%" alt="Search"></a>
+  <a href="docs/screenshots/artist.jpg"><img src="docs/screenshots/artist.jpg" width="49%" alt="Artist page"></a>
+  <a href="docs/screenshots/equalizer.jpg"><img src="docs/screenshots/equalizer.jpg" width="49%" alt="Parametric equalizer"></a>
+  <a href="docs/screenshots/overlay.jpg"><img src="docs/screenshots/overlay.jpg" width="49%" alt="Now-playing overlay in a recording"></a>
+</p>
+
+The visualizer (its own window, also in fullscreen) reacts to bass, mids, treble and the beat:
+
+<p align="center">
+  <img src="docs/screenshots/visualizer-spiral.jpg" width="32%" alt="Visualizer: spiral">
+  <img src="docs/screenshots/visualizer-bloom.jpg" width="32%" alt="Visualizer: bloom">
+  <img src="docs/screenshots/visualizer-aurora.jpg" width="32%" alt="Visualizer: aurora">
+</p>
+
+<sub>Every artist, album, playlist and cover in these pictures is made up (the app's demo mode, available in debug builds with `TIDALFAST_DEMO=1`); no account or TIDAL content is shown.</sub>
+
 ## Features
 
 - **Best quality, always.** tidalfast requests the highest quality TIDAL offers for every track (Hi-Res Lossless → Lossless FLAC → High AAC). Hi-Res streams use DASH, which the player cannot decode yet, so in practice you get lossless FLAC. There is nothing to configure.
@@ -61,7 +84,7 @@ cd tidalfast
 cargo build --release
 ```
 
-The binary ends up in `target/release/tidalfast`. On Linux you need the ALSA development headers (`libasound2-dev` / `alsa-lib`). The Windows build is cross-compiled with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW).
+The binary ends up in `target/release/tidalfast`. Debug builds have a demo mode for screenshots: `TIDALFAST_DEMO=1` swaps TIDAL for made-up music (use throwaway `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` so your settings stay untouched), `TIDALFAST_SHOT=out.png` with `TIDALFAST_SHOT_OPEN`, `_PLAY`, `_NOW`, `_QUEUE`, `_SEARCH`, `_ARTIST`, `_SETTINGS` and `_TAB` saves a picture of the window. On Linux you need the ALSA development headers (`libasound2-dev` / `alsa-lib`). The Windows build is cross-compiled with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW).
 
 ## Signing in
 
@@ -81,6 +104,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 | `src/eq.rs` | Equalizer and spectrum analysis |
 | `src/discord.rs` | Discord Rich Presence worker |
 | `src/import.rs`, `src/link.rs` | Spotify import and Spotify/TIDAL link parsing |
+| `src/demo.rs` | Debug builds only: the made-up music behind the screenshots |
 | `src/viz/` | The visualizer: audio analysis and beat detection, presets, geometry and the OpenGL renderer |
 | `gsr-plugin/` | C plugin for GPU Screen Recorder that draws the overlay card into recordings |
 | `src/overlay.rs`, `src/card.rs` | The optional now-playing overlay: a small localhost web server with a transparent page and a JSON endpoint |

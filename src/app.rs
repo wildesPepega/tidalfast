@@ -327,6 +327,8 @@ impl App {
         ui::apply_theme(&cc.egui_ctx);
 
         let cfg = Settings::load();
+        #[cfg(debug_assertions)]
+        let cfg = if crate::demo::enabled() { crate::demo::settings(cfg) } else { cfg };
         let tokens = crate::tidal::Tokens {
             access_token: cfg.access_token.clone(),
             refresh_token: cfg.refresh_token.clone(),
@@ -5411,6 +5413,11 @@ mod debug_shot {
         pub now: bool,
         pub queue: bool,
         pub play: bool,
+        /// `TIDALFAST_SHOT_OPEN=<n>`: open the n-th playlist of the library (0 = liked songs).
+        pub open: Option<usize>,
+        /// `TIDALFAST_SHOT_AT=<seconds>`: where in the song the demo pretends to be.
+        pub at: f64,
+        pub started_play: bool,
         pub artist: Option<u64>,
         pub profile: bool,
         /// `TIDALFAST_SHOT_SIDEBAR=open|closed`
@@ -5429,6 +5436,8 @@ mod debug_shot {
                 now: std::env::var("TIDALFAST_SHOT_NOW").is_ok(),
                 queue: std::env::var("TIDALFAST_SHOT_QUEUE").is_ok(),
                 play: std::env::var("TIDALFAST_SHOT_PLAY").is_ok(),
+                open: std::env::var("TIDALFAST_SHOT_OPEN").ok().and_then(|v| v.parse().ok()),
+                at: std::env::var("TIDALFAST_SHOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
                 artist: std::env::var("TIDALFAST_SHOT_ARTIST").ok().and_then(|v| v.parse().ok()),
                 profile: std::env::var("TIDALFAST_SHOT_PROFILE").is_ok(),
                 sidebar: std::env::var("TIDALFAST_SHOT_SIDEBAR").ok().map(|v| v == "open"),
@@ -5439,7 +5448,10 @@ mod debug_shot {
 
     impl super::App {
         pub(super) fn debug_shot(&mut self, ctx: &egui::Context) {
-            let Some(path) = self.shot.path.clone() else { return };
+            let path = self.shot.path.clone();
+            if path.is_none() && !crate::demo::enabled() {
+                return;
+            }
             let started = *self.shot.started.get_or_insert_with(Instant::now);
             if !self.shot.prepared && started.elapsed() > Duration::from_secs(2) {
                 self.shot.prepared = true;
@@ -5453,8 +5465,18 @@ mod debug_shot {
                         self.apply_pl_action(pl, super::PlAction::Edit);
                     }
                 }
-                if std::env::var("TIDALFAST_SHOT_TAB").as_deref() == Ok("system") {
-                    self.settings_tab = super::SettingsTab::System;
+                self.settings_tab = match std::env::var("TIDALFAST_SHOT_TAB").as_deref() {
+                    Ok("equalizer") => super::SettingsTab::Equalizer,
+                    Ok("discord") => super::SettingsTab::Discord,
+                    Ok("visualizer") => super::SettingsTab::Visualizer,
+                    Ok("overlay") => super::SettingsTab::Overlay,
+                    Ok("system") => super::SettingsTab::System,
+                    _ => self.settings_tab,
+                };
+                if let Some(n) = self.shot.open {
+                    if let Some(pl) = self.all_playlists().get(n).cloned() {
+                        self.open_playlist_from(pl);
+                    }
                 }
                 self.settings_open = self.shot.settings;
                 self.now_open = self.shot.now;
@@ -5467,12 +5489,45 @@ mod debug_shot {
                 if let Some(id) = self.shot.artist {
                     self.open_artist(id, None);
                 }
-                if self.shot.play {
+                if self.shot.play && !crate::demo::enabled() {
                     // pretend to play (no sound): "playing" from the last source
                     self.playing = true;
                     self.playing_from = self.cfg.last_source.clone();
                 }
             }
+            if crate::demo::enabled() && self.shot.play && !self.shot.started_play && started.elapsed() > Duration::from_secs(3) {
+                // demo: queue what is on screen and stand in the middle of a song, without sound
+                self.shot.started_play = true;
+                let (uuid, tracks) = match &self.open_playlist {
+                    Some(open) => (open.uuid.clone(), open.tracks.clone()),
+                    None => (super::LIKED_UUID.to_string(), Vec::new()),
+                };
+                if !tracks.is_empty() {
+                    self.playing_from = Some(uuid);
+                    self.queue = tracks;
+                    self.queue_index = 1.min(self.queue.len() - 1);
+                    let track = self.queue[self.queue_index].clone();
+                    self.duration = track.duration as f64;
+                    self.position = self.shot.at;
+                    self.current = Some(track);
+                    self.playing = true;
+                    self.finished = false;
+                    self.loading = None;
+                    self.now_quality = "HI_RES_LOSSLESS".into();
+                }
+            }
+            if crate::demo::enabled() && self.playing {
+                // moving bars on the "playing" indicators
+                let t = started.elapsed().as_secs_f32();
+                for (i, bar) in self.viz.iter_mut().enumerate() {
+                    let x = i as f32 / super::VIZ_BARS as f32;
+                    *bar = (0.35 + 0.55 * ((t * 3.1 + i as f32 * 0.9).sin() * 0.5 + 0.5)) * (1.0 - x * 0.5);
+                }
+            }
+            let Some(path) = path else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+                return;
+            };
             if !self.shot.requested && started.elapsed() > Duration::from_secs(6) {
                 self.shot.requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));

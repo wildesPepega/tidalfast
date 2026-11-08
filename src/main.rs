@@ -6,6 +6,8 @@ mod audio;
 mod cache;
 mod card;
 mod config;
+#[cfg(debug_assertions)]
+mod demo;
 mod desktop;
 mod discord;
 mod eq;
@@ -36,7 +38,9 @@ fn main() -> eframe::Result<()> {
     let link_arg = std::env::args().skip(1).find(|a| link::parse(a).is_some());
     // screenshot runs (debug builds) stay out of a running instance's way
     let screenshot = cfg!(debug_assertions)
-        && (std::env::var_os("TIDALFAST_SHOT").is_some() || std::env::var_os("TIDALFAST_VIZ_SHOT").is_some());
+        && (std::env::var_os("TIDALFAST_SHOT").is_some()
+            || std::env::var_os("TIDALFAST_VIZ_SHOT").is_some()
+            || std::env::var_os("TIDALFAST_DEMO").is_some());
     if !screenshot {
         if ipc::forward(link_arg.as_deref().unwrap_or("focus")) {
             return Ok(());
@@ -45,8 +49,17 @@ fn main() -> eframe::Result<()> {
         std::thread::spawn(move || desktop::set_link_handler(handler));
     }
 
+    #[allow(unused_mut)]
+    let mut size = [1080.0, 720.0];
+    // debug builds: `TIDALFAST_SIZE=1440x900` for screenshots
+    #[cfg(debug_assertions)]
+    if let Some((w, h)) = std::env::var("TIDALFAST_SIZE").ok().as_deref().and_then(|v| v.split_once('x')) {
+        if let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>()) {
+            size = [w, h];
+        }
+    }
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_inner_size([1080.0, 720.0])
+        .with_inner_size(size)
         .with_min_inner_size([960.0, 600.0])
         .with_title("tidalfast")
         .with_app_id("tidalfast");

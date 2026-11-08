@@ -191,6 +191,11 @@ impl Net {
         client.set_tokens(&tokens);
 
         rt.spawn_blocking(prune_cache);
+        #[cfg(debug_assertions)]
+        if crate::demo::enabled() {
+            rt.spawn(crate::demo::worker(cmd_rx, ev_tx));
+            return Ok(Self { tx: cmd_tx, rx: ev_rx, _rt: rt });
+        }
         rt.spawn(worker(client, cmd_rx, cmd_tx.clone(), ev_tx));
 
         Ok(Self {

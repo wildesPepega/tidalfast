@@ -99,7 +99,7 @@ impl App {
         card().show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 let on = self.cfg.eq.enabled;
-                if pill(ui, if on { "EQ AN" } else { "EQ OFF" }, on, 78.0).clicked() {
+                if pill(ui, if on { "EQ ON" } else { "EQ OFF" }, on, 78.0).clicked() {
                     self.cfg.eq.enabled = !on;
                     edit.changed = true;
                     edit.keep_preset = true;

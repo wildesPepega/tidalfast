@@ -143,8 +143,8 @@ impl State {
     fn pinned(mut self) -> Self {
         if cfg!(debug_assertions) {
             if let Some(n) = std::env::var("TIDALFAST_VIZ_PRESET").ok().and_then(|v| v.parse::<usize>().ok()) {
+                // stays on this one for the few seconds a screenshot run lasts
                 self.current = self.presets[n % self.presets.len()].clone();
-                self.locked = true;
             }
         }
         self
@@ -399,7 +399,7 @@ impl Viz {
         let builder = ViewportBuilder::default()
             .with_title("tidalfast visualizer")
             .with_app_id("tidalfast")
-            .with_inner_size([800.0, 600.0])
+            .with_inner_size(window_size())
             .with_min_inner_size([320.0, 240.0]);
         ctx.show_viewport_deferred(ViewportId::from_hash_of(VIEWPORT), builder, move |ctx, _class| {
             window(ctx, &shared);
@@ -667,4 +667,15 @@ fn overlay(ui: &mut egui::Ui, sh: &Arc<Shared>, rect: egui::Rect) {
         }
     }
     let _ = time;
+}
+
+/// 800×600; debug builds can ask for another size with `TIDALFAST_VIZ_SIZE=1280x720` (for screenshots).
+fn window_size() -> [f32; 2] {
+    #[cfg(debug_assertions)]
+    if let Some((w, h)) = std::env::var("TIDALFAST_VIZ_SIZE").ok().as_deref().and_then(|v| v.split_once('x')) {
+        if let (Ok(w), Ok(h)) = (w.parse(), h.parse()) {
+            return [w, h];
+        }
+    }
+    [800.0, 600.0]
 }

@@ -52,6 +52,11 @@ struct Notifier {
 
 impl Notifier {
     fn send(&self, event: SysEvent) {
+        // a hidden window does not run the app's loop: bring it back right here
+        #[cfg(target_os = "linux")]
+        if matches!(event, SysEvent::Show | SysEvent::ToggleWindow) {
+            crate::kwin::wake_if_hidden();
+        }
         let _ = self.tx.send(event);
         self.ctx.request_repaint();
     }

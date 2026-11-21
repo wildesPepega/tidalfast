@@ -13,6 +13,8 @@ mod discord;
 mod eq;
 mod import;
 mod ipc;
+#[cfg(target_os = "linux")]
+mod kwin;
 mod link;
 mod model;
 mod net;

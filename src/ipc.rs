@@ -33,6 +33,8 @@ mod imp {
                 std::thread::spawn(move || {
                     for stream in listener.incoming().flatten() {
                         for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                            #[cfg(target_os = "linux")]
+                            crate::kwin::wake_if_hidden();
                             let _ = tx.send(line);
                             ctx.request_repaint();
                         }

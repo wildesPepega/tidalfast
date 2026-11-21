@@ -1612,6 +1612,10 @@ impl App {
 
     fn show_window(&mut self, ctx: &egui::Context) {
         self.window_hidden = false;
+        #[cfg(target_os = "linux")]
+        if crate::kwin::available() {
+            crate::kwin::set_hidden(false);
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -1620,9 +1624,14 @@ impl App {
     fn hide_window(&mut self, ctx: &egui::Context) {
         self.window_hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        // Wayland can't hide a window, only minimise it
+        // Wayland can't hide a window, only minimise it ...
         if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        // ... except KWin, which can make it vanish from the task manager and switcher too
+        #[cfg(target_os = "linux")]
+        if crate::kwin::available() {
+            crate::kwin::set_hidden(true);
         }
     }
 

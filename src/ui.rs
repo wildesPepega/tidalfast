@@ -1,5 +1,7 @@
 //! Theme and small custom widgets shared by all views.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use eframe::egui::{
     self, Rect, Align2, Color32, CornerRadius, FontFamily, FontId, Response, Sense, Stroke, TextStyle, Ui,
 };
@@ -17,12 +19,7 @@ pub const fn glass(alpha: u8, r: u8, g: u8, b: u8) -> Color32 {
 
 // Acrylic dark theme: panels are translucent, so the wallpaper built from the
 // current track's colours glows through them like frosted glass.
-pub const ACCENT: Color32 = Color32::from_rgb(166, 227, 161); // green
-pub const ACCENT_DIM: Color32 = glass(70, 166, 227, 161);
 pub const BG: Color32 = Color32::from_rgb(11, 12, 18); // window clear colour
-pub const PANEL: Color32 = glass(178, 16, 17, 26); // acrylic glass
-pub const PANEL_CLEAR: Color32 = glass(118, 12, 13, 20); // extra transparent (full-screen player)
-pub const PANEL_SOLID: Color32 = Color32::from_rgb(19, 20, 30); // menus, modals: fully opaque
 pub const CARD: Color32 = glass(14, 255, 255, 255);
 pub const CARD_HOVER: Color32 = glass(30, 255, 255, 255);
 pub const LINE: Color32 = glass(34, 255, 255, 255);
@@ -32,6 +29,181 @@ pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 156, 180);
 pub const DANGER: Color32 = Color32::from_rgb(243, 139, 168); // red
 pub const WARN: Color32 = Color32::from_rgb(249, 226, 175); // yellow
 pub const OK: Color32 = Color32::from_rgb(166, 227, 161); // green
+
+
+// ------------------------------------------------------------------ the theme
+
+/// The colours that follow the song: the accent and a dark tint for the panels.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Theme {
+    pub accent: Color32,
+    /// Very dark colour of the glass panels.
+    pub tint: Color32,
+    /// How light the backdrop is (0 dark … 1 bright): bright ones get more opaque panels.
+    pub light: f32,
+}
+
+pub const DEFAULT_ACCENT: Color32 = Color32::from_rgb(166, 227, 161); // green
+const DEFAULT_TINT: Color32 = Color32::from_rgb(17, 18, 28);
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self { accent: DEFAULT_ACCENT, tint: DEFAULT_TINT, light: 0.0 }
+    }
+}
+
+static ACCENT_BITS: AtomicU32 = AtomicU32::new(0);
+static TINT_BITS: AtomicU32 = AtomicU32::new(0);
+static LIGHT_BITS: AtomicU32 = AtomicU32::new(0);
+
+fn pack(c: Color32) -> u32 {
+    u32::from_be_bytes([1, c.r(), c.g(), c.b()])
+}
+
+fn unpack(bits: u32, fallback: Color32) -> Color32 {
+    if bits == 0 {
+        return fallback;
+    }
+    let [_, r, g, b] = bits.to_be_bytes();
+    Color32::from_rgb(r, g, b)
+}
+
+/// Make this the theme all widgets draw with.
+pub fn set_theme(theme: Theme) {
+    ACCENT_BITS.store(pack(theme.accent), Ordering::Relaxed);
+    TINT_BITS.store(pack(theme.tint), Ordering::Relaxed);
+    LIGHT_BITS.store(theme.light.to_bits(), Ordering::Relaxed);
+}
+
+pub fn accent() -> Color32 {
+    unpack(ACCENT_BITS.load(Ordering::Relaxed), DEFAULT_ACCENT)
+}
+
+pub fn accent_dim() -> Color32 {
+    let a = accent();
+    glass(70, a.r(), a.g(), a.b())
+}
+
+fn tint() -> Color32 {
+    unpack(TINT_BITS.load(Ordering::Relaxed), DEFAULT_TINT)
+}
+
+fn light() -> f32 {
+    f32::from_bits(LIGHT_BITS.load(Ordering::Relaxed))
+}
+
+/// Acrylic glass: dark, tinted by the song, more opaque in front of a bright backdrop.
+pub fn panel() -> Color32 {
+    let t = tint();
+    glass((178.0 + 48.0 * light()) as u8, t.r(), t.g(), t.b())
+}
+
+/// Extra transparent glass (the full-screen player).
+pub fn panel_clear() -> Color32 {
+    let t = tint();
+    glass((118.0 + 70.0 * light()) as u8, t.r(), t.g(), t.b())
+}
+
+/// Menus and dialogs: fully opaque.
+pub fn panel_solid() -> Color32 {
+    let t = tint();
+    let (r, g, b) = (t.r() as u16 + 3, t.g() as u16 + 3, t.b() as u16 + 4);
+    Color32::from_rgb(r.min(255) as u8, g.min(255) as u8, b.min(255) as u8)
+}
+
+fn to_hsl(c: Color32) -> (f32, f32, f32) {
+    let (r, g, b) = (c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0);
+    let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (mx + mn) / 2.0;
+    if (mx - mn).abs() < 1e-6 {
+        return (0.0, 0.0, l);
+    }
+    let d = mx - mn;
+    let s = if l > 0.5 { d / (2.0 - mx - mn) } else { d / (mx + mn) };
+    let h = if mx == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if mx == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h / 6.0, s, l)
+}
+
+fn from_hsl(h: f32, s: f32, l: f32) -> Color32 {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h.rem_euclid(1.0) * 6.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h.rem_euclid(1.0) * 6.0) as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    Color32::from_rgb(((r + m) * 255.0).round() as u8, ((g + m) * 255.0).round() as u8, ((b + m) * 255.0).round() as u8)
+}
+
+/// WCAG relative luminance.
+fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG contrast ratio of two colours.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The theme for a cover with these (vivid) colours. Covers that are grey, or
+/// whose colours would not read on the dark glass, fall back to the default
+/// accent; bright covers get more opaque panels so the text stays readable.
+pub fn theme_for(palette: [Color32; 3]) -> Theme {
+    let default = Theme::default();
+    // the colour with the most character: saturated, and not at the extremes of lightness
+    let score = |c: Color32| {
+        let (_, s, l) = to_hsl(c);
+        s * (1.0 - (l - 0.55).abs() * 1.2).max(0.0)
+    };
+    let best = palette.iter().copied().max_by(|a, b| score(*a).total_cmp(&score(*b))).unwrap_or(DEFAULT_ACCENT);
+    let (h, s, _) = to_hsl(best);
+    // brightness of the backdrop the palette would give
+    let mean = palette.iter().map(|c| luminance(*c)).sum::<f32>() / 3.0;
+    let light = ((mean - 0.18) / 0.45).clamp(0.0, 1.0);
+    if s < 0.22 {
+        // a grey or washed-out cover: nothing to follow
+        return Theme { light, ..default };
+    }
+    // a hint of the cover's hue in the glass, kept very dark
+    let tint = from_hsl(h, (s * 0.6).clamp(0.25, 0.5), 0.115);
+    // lively but readable: a fixed saturation and lightness band, brightened until the
+    // contrast against the glass is comfortable (accents are also text and button fills)
+    let mut accent = from_hsl(h, s.clamp(0.5, 0.9), 0.68);
+    let mut l = 0.68;
+    while contrast(accent, panel_solid_for(tint)) < 6.0 && l < 0.92 {
+        l += 0.03;
+        accent = from_hsl(h, s.clamp(0.5, 0.9), l);
+    }
+    Theme { accent, tint, light }
+}
+
+fn panel_solid_for(tint: Color32) -> Color32 {
+    Color32::from_rgb(tint.r() + 3, tint.g() + 3, tint.b() + 4)
+}
+
+/// Blend towards `to` (used to ease the theme when the song changes).
+pub fn lerp_theme(from: Theme, to: Theme, t: f32) -> Theme {
+    Theme {
+        accent: lerp_color(from.accent, to.accent, t),
+        tint: lerp_color(from.tint, to.tint, t),
+        light: from.light + (to.light - from.light) * t,
+    }
+}
 
 /// Wallpaper colours used while nothing is playing.
 pub const DEFAULT_PALETTE: [Color32; 3] = [
@@ -333,20 +505,25 @@ pub fn paint_icon(painter: &egui::Painter, center: egui::Pos2, glyph: &str, size
 
 pub fn apply_theme(ctx: &egui::Context) {
     setup_fonts(ctx);
+    apply_visuals(ctx);
+}
+
+/// Set egui's colours and spacing from the current theme (cheap; again whenever the accent moves).
+pub fn apply_visuals(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = BG;
-    v.window_fill = PANEL_SOLID;
+    v.window_fill = panel_solid();
     v.extreme_bg_color = BG;
     v.faint_bg_color = CARD;
     v.window_stroke = Stroke::new(1.0_f32, EDGE);
     v.window_corner_radius = CornerRadius::same(14);
     v.menu_corner_radius = CornerRadius::same(12);
     v.override_text_color = None;
-    v.hyperlink_color = ACCENT;
+    v.hyperlink_color = accent();
     v.warn_fg_color = WARN;
     v.error_fg_color = DANGER;
-    v.selection.bg_fill = ACCENT_DIM;
-    v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
+    v.selection.bg_fill = accent_dim();
+    v.selection.stroke = Stroke::new(1.0_f32, accent());
     v.window_shadow = egui::Shadow { offset: [0, 10], blur: 34, spread: 0, color: Color32::from_black_alpha(130) };
     v.popup_shadow = egui::Shadow { offset: [0, 8], blur: 26, spread: 0, color: Color32::from_black_alpha(120) };
 
@@ -373,7 +550,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     // pressed: a lighter frosted surface. egui also takes bold text colour from here.
     w.active.bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 42);
     w.active.weak_bg_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 42);
-    w.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    w.active.bg_stroke = Stroke::new(1.0_f32, accent());
     w.active.corner_radius = radius;
     w.active.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
 
@@ -417,7 +594,7 @@ pub fn apply_theme(ctx: &egui::Context) {
 /// (Text selection keeps the dim green, as egui does not recolour selected text.)
 pub fn green_selection(ui: &mut Ui) {
     let v = ui.visuals_mut();
-    v.selection.bg_fill = ACCENT;
+    v.selection.bg_fill = accent();
     v.selection.stroke = Stroke::new(1.0_f32, BG);
 }
 
@@ -454,7 +631,7 @@ pub fn paint_current_row(painter: &egui::Painter, rect: Rect) {
             egui::vec2(3.0, rect.height() - 20.0),
         ),
         2.0,
-        ACCENT,
+        accent(),
     );
 }
 
@@ -485,7 +662,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, active: bool) -> Response
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), Sense::click());
     pointer_on_hover(&resp);
     let color = if active || resp.is_pointer_button_down_on() {
-        ACCENT
+        accent()
     } else if resp.hovered() {
         TEXT
     } else {
@@ -509,7 +686,7 @@ pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), Sense::click());
     pointer_on_hover(&resp);
     let fill = if resp.is_pointer_button_down_on() {
-        ACCENT
+        accent()
     } else if resp.hovered() {
         Color32::WHITE
     } else {
@@ -538,7 +715,7 @@ pub fn action_button(ui: &mut Ui, icon: &str, label: &str, primary: bool) -> Res
     }
     let (fill, ink) = match (enabled, primary, resp.hovered()) {
         (false, _, _) => (CARD, TEXT_DIM),
-        (true, true, false) => (ACCENT, BG),
+        (true, true, false) => (accent(), BG),
         (true, true, true) => (Color32::from_rgb(190, 238, 185), BG),
         (true, false, false) => (CARD, TEXT),
         (true, false, true) => (CARD_HOVER, TEXT),
@@ -563,7 +740,7 @@ pub fn pill(ui: &mut Ui, label: &str, active: bool, width: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), Sense::click());
     pointer_on_hover(&resp);
     let (fill, text) = if active {
-        (ACCENT, BG)
+        (accent(), BG)
     } else if resp.hovered() {
         (CARD_HOVER, TEXT)
     } else {
@@ -597,7 +774,7 @@ pub fn nav_item(ui: &mut Ui, icon: &str, label: &str, selected: bool, badge: Opt
                 egui::vec2(3.0, rect.height() - 16.0),
             ),
             2.0,
-            ACCENT,
+            accent(),
         );
     } else if resp.hovered() {
         p.rect_filled(rect, CornerRadius::same(10), CARD);
@@ -608,7 +785,7 @@ pub fn nav_item(ui: &mut Ui, icon: &str, label: &str, selected: bool, badge: Opt
         egui::pos2(rect.left() + 26.0, rect.center().y),
         icon,
         18.0,
-        if selected { ACCENT } else { ink },
+        if selected { accent() } else { ink },
         FontFamily::Proportional,
     );
     p.text(
@@ -625,7 +802,7 @@ pub fn nav_item(ui: &mut Ui, icon: &str, label: &str, selected: bool, badge: Opt
             egui::pos2(rect.right() - size.x * 0.5 - 8.0, rect.center().y),
             size,
         );
-        p.rect_filled(r, CornerRadius::same(8), ACCENT);
+        p.rect_filled(r, CornerRadius::same(8), accent());
         p.galley(r.center() - galley.size() * 0.5, galley, BG);
     }
     resp
@@ -660,7 +837,7 @@ pub fn thin_slider(ui: &mut Ui, value: &mut f32, width: f32) -> Response {
     p.rect_filled(
         egui::Rect::from_min_max(egui::pos2(x0, y - 2.0), egui::pos2(x1.max(x0), y + 2.0)),
         2.0,
-        if active { ACCENT } else { TEXT_DIM },
+        if active { accent() } else { TEXT_DIM },
     );
     if active {
         p.circle_filled(egui::pos2(x1, y), 6.0, TEXT);
@@ -692,7 +869,7 @@ pub fn heart_button(ui: &mut Ui, liked: bool, size: f32, enabled: bool) -> Respo
     let color = if !enabled {
         LINE
     } else if liked {
-        ACCENT
+        accent()
     } else if resp.hovered() {
         TEXT
     } else {
@@ -700,4 +877,62 @@ pub fn heart_button(ui: &mut Ui, liked: bool, size: f32, enabled: bool) -> Respo
     };
     paint_heart(ui.painter(), rect.center(), size, color, liked);
     resp
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    fn flat(c: Color32) -> [Color32; 3] {
+        [c, c, c]
+    }
+
+    #[test]
+    fn a_colourful_cover_gives_a_readable_accent_of_the_same_hue() {
+        let blue = Color32::from_rgb(70, 110, 220);
+        let t = theme_for([blue, Color32::from_rgb(90, 60, 160), Color32::from_rgb(30, 80, 120)]);
+        assert!(contrast(t.accent, panel_solid_for(t.tint)) >= 6.0);
+        assert!((to_hsl(t.accent).0 - to_hsl(blue).0).abs() < 0.05, "same hue");
+        assert!(luminance(t.tint) < 0.02, "the glass stays dark");
+    }
+
+    #[test]
+    fn every_hue_stays_readable_on_the_glass_and_under_dark_button_text() {
+        for step in 0..72 {
+            let c = from_hsl(step as f32 / 72.0, 0.85, 0.5);
+            let t = theme_for(flat(c));
+            assert!(contrast(t.accent, panel_solid_for(t.tint)) >= 4.5, "hue {step}: {:?}", t.accent);
+            assert!(contrast(t.accent, BG) >= 5.0, "hue {step}: dark text on the accent");
+        }
+    }
+
+    #[test]
+    fn grey_black_and_white_covers_fall_back_to_the_default_accent() {
+        for c in [Color32::from_gray(128), Color32::from_gray(8), Color32::from_gray(250), Color32::from_rgb(120, 124, 122)] {
+            assert_eq!(theme_for(flat(c)).accent, DEFAULT_ACCENT, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn bright_covers_get_more_opaque_panels_than_dark_ones() {
+        let dark = theme_for(flat(Color32::from_rgb(30, 20, 90)));
+        let bright = theme_for(flat(Color32::from_rgb(255, 235, 120)));
+        assert!(bright.light > 0.8 && dark.light < 0.2, "{} {}", bright.light, dark.light);
+        set_theme(dark);
+        let a_dark = panel().a();
+        set_theme(bright);
+        let a_bright = panel().a();
+        set_theme(Theme::default());
+        assert!(a_bright > a_dark + 30, "{a_bright} vs {a_dark}");
+    }
+
+    #[test]
+    fn the_theme_glides_between_two_songs() {
+        let a = Theme::default();
+        let b = theme_for(flat(Color32::from_rgb(220, 60, 90)));
+        assert_eq!(lerp_theme(a, b, 0.0), a);
+        assert_eq!(lerp_theme(a, b, 1.0), b);
+        let mid = lerp_theme(a, b, 0.5);
+        assert!(mid != a && mid != b);
+    }
 }

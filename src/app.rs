@@ -20,7 +20,7 @@ use crate::model::{format_duration, Album, Artist, ArtistPage, CreditGroup, Impo
 use crate::net::{Cmd, Ev, Net, Opened};
 use crate::ui::{
     self, action_button, icon_button, icons, nav_item, pill, play_button, pointer_on_hover,
-    thin_slider, Icon, ACCENT, BG, CARD, CARD_HOVER, LINE, TEXT_DIM,
+    thin_slider, Icon, accent, BG, CARD, CARD_HOVER, LINE, TEXT_DIM,
 };
 
 const COVER_ROW: u32 = 160;
@@ -84,6 +84,7 @@ enum NowTab {
 enum SettingsTab {
     Playback,
     Equalizer,
+    Appearance,
     Discord,
     Overlay,
     System,
@@ -315,6 +316,8 @@ pub struct App {
     blur_tex: HashMap<String, TextureHandle>,
     /// The wallpaper colours currently shown (eased towards the song's).
     bg_colors: [Color32; 3],
+    /// The interface colours currently shown (eased the same way).
+    theme: ui::Theme,
     /// Backdrop currently shown, the one fading out, and the fade progress.
     wall_url: Option<String>,
     wall_prev: Option<String>,
@@ -450,6 +453,7 @@ impl App {
             palettes: HashMap::new(),
             blur_tex: HashMap::new(),
             bg_colors: ui::DEFAULT_PALETTE,
+            theme: ui::Theme::default(),
             wall_url: None,
             wall_prev: None,
             wall_t: 1.0,
@@ -1679,25 +1683,19 @@ impl App {
 
     // ------------------------------------------------------------------ draw
 
-    fn header(&mut self, ui: &mut egui::Ui) {
+    fn header(&mut self, ui: &mut egui::Ui, full: bool) {
         let rect = ui.max_rect();
 
-        // The two round buttons sit in the middle of a library-wide column at each
-        // end, so the header is symmetric and the home button lines up with the
-        // library right below it.
-        let column = LIBRARY_COLLAPSED;
+        // Two equal rounded squares at the ends of the bar. The home button is only
+        // up here in the full-screen player; otherwise it lives in the library.
         let size = egui::vec2(HEADER_HEIGHT, HEADER_HEIGHT);
-        let home_tile = egui::Rect::from_center_size(egui::pos2(rect.left() + column / 2.0, rect.center().y), size);
-        let settings_tile = egui::Rect::from_center_size(egui::pos2(rect.right() - column / 2.0, rect.center().y), size);
+        let home_tile = egui::Rect::from_min_size(rect.left_top(), size);
+        let settings_tile = egui::Rect::from_min_size(egui::pos2(rect.right() - size.x, rect.top()), size);
 
-        // left: home
-        let at_home = self.view == View::Playlists && self.open_playlist.is_none() && !self.now_open;
-        if self.user.is_some() {
+        if self.user.is_some() && full {
             let home = ui.interact(home_tile, egui::Id::new("home_button"), egui::Sense::click());
             pointer_on_hover(&home);
-            let color = if at_home { ACCENT } else { ui::TEXT };
-            let family = if at_home { ui::fill_family() } else { egui::FontFamily::Proportional };
-            top_tile(ui, home_tile, home.hovered(), at_home, icons::HOUSE, 21.0, color, family);
+            top_tile(ui, home_tile, home.hovered(), false, icons::HOUSE, 21.0, ui::TEXT, egui::FontFamily::Proportional);
             if home.on_hover_text("Home").clicked() {
                 self.go_home();
             }
@@ -1722,9 +1720,9 @@ impl App {
         let focused = mid.ctx().memory(|m| m.has_focus(search_id));
         let hovered = mid.rect_contains_pointer(field);
         let border = if focused {
-            egui::Stroke::new(1.5_f32, ACCENT)
+            egui::Stroke::new(1.5_f32, accent())
         } else if hovered {
-            egui::Stroke::new(1.0_f32, ui::with_alpha(ACCENT, 110))
+            egui::Stroke::new(1.0_f32, ui::with_alpha(accent(), 110))
         } else {
             egui::Stroke::new(1.0_f32, ui::EDGE)
         };
@@ -1738,7 +1736,7 @@ impl App {
             egui::Align2::LEFT_CENTER,
             icons::MAGNIFYING_GLASS,
             egui::FontId::proportional(17.0),
-            if focused { ACCENT } else { TEXT_DIM },
+            if focused { accent() } else { TEXT_DIM },
         );
 
         let inner = field.shrink2(egui::vec2(44.0, 0.0));
@@ -1803,13 +1801,13 @@ impl App {
         // right: settings / account menu
         let resp = ui.interact(settings_tile, egui::Id::new("settings_button"), egui::Sense::click());
         pointer_on_hover(&resp);
-        let color = if self.profile_menu_open { ACCENT } else { ui::TEXT };
+        let color = if self.profile_menu_open { accent() } else { ui::TEXT };
         top_tile(ui, settings_tile, resp.hovered(), self.profile_menu_open, icons::GEAR, 21.0, color, egui::FontFamily::Proportional);
         if self.update.available.is_some() {
             // a new version is waiting
-            let dot = settings_tile.center() + egui::vec2(15.0, -15.0);
-            ui.painter().circle_filled(dot, 5.5, ui::PANEL_SOLID);
-            ui.painter().circle_filled(dot, 4.0, ACCENT);
+            let dot = settings_tile.right_top() + egui::vec2(-8.0, 8.0);
+            ui.painter().circle_filled(dot, 5.5, ui::panel_solid());
+            ui.painter().circle_filled(dot, 4.0, accent());
         }
         if resp.on_hover_text("Settings").clicked() {
             self.profile_menu_open = !self.profile_menu_open;
@@ -1831,7 +1829,7 @@ impl App {
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-ui::GAP, self.avatar_rect.bottom() + 8.0))
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style())
-                    .fill(ui::PANEL_SOLID)
+                    .fill(ui::panel_solid())
                     .corner_radius(egui::CornerRadius::same(14))
                     .inner_margin(egui::Margin::same(8))
                     .show(ui, |ui| {
@@ -1878,6 +1876,16 @@ impl App {
     fn library(&mut self, ui: &mut egui::Ui) {
         let t = self.sidebar_t;
         let mut want_create = false;
+        // home, above the library itself
+        let at_home = self.view == View::Playlists && self.open_playlist.is_none() && !self.now_open;
+        if home_row(ui, at_home, t) {
+            self.go_home();
+        }
+        ui.add_space(2.0);
+        let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().line_segment([line.left_center() + egui::vec2(6.0, 0.0), line.right_center() - egui::vec2(6.0, 0.0)], egui::Stroke::new(1.0_f32, ui::LINE));
+        ui.add_space(8.0);
+
         // One row of round buttons: the chevron always sits in the middle of the
         // collapsed width (under the home button); "New playlist" and the title
         // appear when the library is open.
@@ -2054,7 +2062,7 @@ impl App {
                     TransitionMode::Off => {}
                 }
                 if !meta.is_empty() {
-                    ui.add(egui::Label::new(RichText::new(meta.join("  ·  ")).size(10.5).color(ACCENT)).truncate());
+                    ui.add(egui::Label::new(RichText::new(meta.join("  ·  ")).size(10.5).color(accent())).truncate());
                 }
             });
         }
@@ -2239,7 +2247,7 @@ impl App {
             .fixed_pos(field.left_bottom() + egui::vec2(0.0, 8.0))
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(ui::PANEL_SOLID)
+                    .fill(ui::panel_solid())
                     .stroke(egui::Stroke::new(1.0_f32, ui::EDGE))
                     .corner_radius(egui::CornerRadius::same(16))
                     .inner_margin(egui::Margin::same(8))
@@ -2683,7 +2691,7 @@ impl App {
             }
         }
         let Some(dialog) = self.dialog.take() else { return };
-        let frame = ui::card().fill(ui::PANEL_SOLID).inner_margin(egui::Margin::same(20));
+        let frame = ui::card().fill(ui::panel_solid()).inner_margin(egui::Margin::same(20));
         let mut keep: Option<Dialog> = None;
         let mut confirm: Option<Dialog> = None;
         let modal = egui::Modal::new(egui::Id::new("dialog_modal"))
@@ -3070,7 +3078,7 @@ impl App {
             ui.add_space(14.0);
             ui.vertical(|ui| {
                 ui.add_space(4.0);
-                ui.label(RichText::new("IMPORT SPOTIFY PLAYLIST").size(11.5).strong().color(ACCENT));
+                ui.label(RichText::new("IMPORT SPOTIFY PLAYLIST").size(11.5).strong().color(accent()));
                 ui.add_space(2.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut st.title)
@@ -3083,7 +3091,7 @@ impl App {
                     ui.add(
                         egui::ProgressBar::new(done as f32 / total.max(1) as f32)
                             .desired_width(380.0)
-                            .fill(ACCENT),
+                            .fill(accent()),
                     );
                     ui.label(
                         RichText::new(format!("{done} / {total} tracks matched"))
@@ -3178,7 +3186,7 @@ impl App {
             ui.add_space(14.0);
             ui.vertical(|ui| {
                 ui.add_space(26.0);
-                ui.label(RichText::new("ARTIST").size(11.5).strong().color(ACCENT));
+                ui.label(RichText::new("ARTIST").size(11.5).strong().color(accent()));
                 ui.label(RichText::new(&artist.name).size(34.0).strong());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -3459,7 +3467,7 @@ impl App {
             .show(ui, |ui| {
                 ui.add_space(12.0);
                 for group in &groups {
-                    ui.label(RichText::new(credit_role(&group.role)).size(12.5).strong().color(ACCENT));
+                    ui.label(RichText::new(credit_role(&group.role)).size(12.5).strong().color(accent()));
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         for (i, (name, id)) in group.people.iter().enumerate() {
@@ -3581,7 +3589,7 @@ impl App {
             return;
         }
         let frame = egui::Frame::new()
-            .fill(ui::PANEL_SOLID)
+            .fill(ui::panel_solid())
             .stroke(egui::Stroke::new(1.0_f32, ui::EDGE))
             .corner_radius(egui::CornerRadius::same(18))
             .inner_margin(egui::Margin::same(0));
@@ -3612,6 +3620,7 @@ impl App {
                                     for (tab, icon, label) in [
                                         (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback"),
                                         (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer"),
+                                        (SettingsTab::Appearance, icons::PALETTE, "Appearance"),
                                         (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord"),
                                         (SettingsTab::Overlay, icons::SUBTITLES, "Overlay"),
                                         (SettingsTab::System, icons::DESKTOP, "System"),
@@ -3737,6 +3746,32 @@ impl App {
                 }
             }
             SettingsTab::Equalizer => self.equalizer_view(ui),
+            SettingsTab::Appearance => {
+                ui.heading("Appearance");
+                ui.add_space(8.0);
+                let mut theme = self.cfg.theme_from_cover;
+                if ui.checkbox(&mut theme, "Match the interface to the cover").changed() {
+                    self.cfg.theme_from_cover = theme;
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new(
+                        "Accent colour, panels, menus and settings take their colours from the playing song's cover. \
+                         Grey or very dark and very bright covers fall back to the default look so everything stays readable.",
+                    )
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(14.0);
+                let mut backdrop = self.cfg.cover_backdrop;
+                if ui.checkbox(&mut backdrop, "Cover backdrop").changed() {
+                    self.cfg.cover_backdrop = backdrop;
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new("The blurred cover and its colours behind the whole app. Off: a calm, fixed backdrop.")
+                        .color(TEXT_DIM),
+                );
+            }
             SettingsTab::Discord => {
                 ui.heading("Discord");
                 ui.add_space(8.0);
@@ -4024,7 +4059,7 @@ impl App {
         let mut restart = false;
         if let Some(release) = self.update.available.clone() {
             ui::card().show(ui, |ui| {
-                ui.label(RichText::new(format!("Version {} is available", release.version)).strong().color(ACCENT));
+                ui.label(RichText::new(format!("Version {} is available", release.version)).strong().color(accent()));
                 if !release.notes.is_empty() {
                     let notes: String = release.notes.lines().take(14).collect::<Vec<_>>().join("\n");
                     ui.add_space(4.0);
@@ -4124,7 +4159,7 @@ impl App {
     fn login_view(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(60.0);
-            ui.label(RichText::new("tidalfast").size(36.0).strong().color(ACCENT));
+            ui.label(RichText::new("tidalfast").size(36.0).strong().color(accent()));
             ui.add_space(6.0);
             ui.label(RichText::new("A native TIDAL client").weak());
             ui.add_space(30.0);
@@ -4137,7 +4172,7 @@ impl App {
                         .size(40.0)
                         .monospace()
                         .strong()
-                        .color(ACCENT),
+                        .color(accent()),
                 );
                 ui.add_space(10.0);
                 let url = code
@@ -4159,7 +4194,7 @@ impl App {
                     egui::Button::new(
                         RichText::new("  Sign in with TIDAL  ").size(16.0).strong().color(BG),
                     )
-                    .fill(ACCENT);
+                    .fill(accent());
                 if ui.add_enabled(!self.login_busy, button).clicked() {
                     self.login_busy = true;
                     self.net.send(Cmd::Login);
@@ -4246,11 +4281,12 @@ impl eframe::App for App {
 
         // wallpaper: blurred cover + the palette of the current song
         let cover_url = self.current.as_ref().and_then(|t| t.cover_url(COVER_NOW));
-        let target = cover_url
-            .as_ref()
-            .and_then(|u| self.palettes.get(u))
-            .copied()
-            .unwrap_or(ui::DEFAULT_PALETTE);
+        let palette = cover_url.as_ref().and_then(|u| self.palettes.get(u)).copied();
+        let target = if self.cfg.cover_backdrop { palette.unwrap_or(ui::DEFAULT_PALETTE) } else { ui::DEFAULT_PALETTE };
+        let target_theme = match palette {
+            Some(p) if self.cfg.theme_from_cover => ui::theme_for(p),
+            _ => ui::Theme::default(),
+        };
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
         let ease = 1.0 - (-dt * 3.2).exp();
         let mut moving = false;
@@ -4264,6 +4300,17 @@ impl eframe::App for App {
                 *cur = next;
                 moving = true;
             }
+        }
+        // the interface colours glide to the new song's the same way
+        let mut next_theme = ui::lerp_theme(self.theme, target_theme, ease);
+        if next_theme == self.theme && self.theme != target_theme {
+            next_theme = target_theme;
+        }
+        if next_theme != self.theme {
+            self.theme = next_theme;
+            ui::set_theme(self.theme);
+            ui::apply_visuals(ctx);
+            moving = true;
         }
         if moving {
             ctx.request_repaint();
@@ -4281,7 +4328,14 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         let tex = |u: &Option<String>| u.as_ref().and_then(|u| self.blur_tex.get(u)).map(|t| t.id());
-        ui::paint_song_wallpaper(ctx, &self.bg_colors, tex(&self.wall_url), tex(&self.wall_prev), self.wall_t);
+        let backdrop = self.cfg.cover_backdrop;
+        ui::paint_song_wallpaper(
+            ctx,
+            &self.bg_colors,
+            if backdrop { tex(&self.wall_url) } else { None },
+            if backdrop { tex(&self.wall_prev) } else { None },
+            self.wall_t,
+        );
 
         // Layout: floating glass cards on the wallpaper, all with the same gap
         // to each other and to the window edge. Every card clips its content.
@@ -4311,9 +4365,9 @@ impl eframe::App for App {
                     egui::pos2(screen.right() - g, bottom),
                 );
 
-                section(ui, "header", header, None, egui::Vec2::ZERO, |ui| self.header(ui));
+                section(ui, "header", header, None, egui::Vec2::ZERO, |ui| self.header(ui, full));
                 if show_player {
-                    section(ui, "player", player, Some(ui::PANEL), egui::vec2(18.0, 10.0), |ui| {
+                    section(ui, "player", player, Some(ui::panel()), egui::vec2(18.0, 10.0), |ui| {
                         self.player_bar(ui)
                     });
                 }
@@ -4327,15 +4381,15 @@ impl eframe::App for App {
                     self.sidebar_t = t;
                     let width = LIBRARY_COLLAPSED + (LIBRARY_EXPANDED - LIBRARY_COLLAPSED) * t;
                     let side = egui::Rect::from_min_size(body.min, egui::vec2(width, body.height()));
-                    section(ui, "library", side, Some(ui::PANEL), egui::vec2(8.0, 12.0), |ui| self.library(ui));
+                    section(ui, "library", side, Some(ui::panel()), egui::vec2(8.0, 12.0), |ui| self.library(ui));
                     body.min.x = side.right() + g;
                 }
                 if logged_in && self.queue_open && !full {
                     let queue = egui::Rect::from_min_max(egui::pos2(body.right() - QUEUE_WIDTH, body.top()), body.max);
-                    section(ui, "queue", queue, Some(ui::PANEL), egui::vec2(10.0, 12.0), |ui| self.queue_panel(ui));
+                    section(ui, "queue", queue, Some(ui::panel()), egui::vec2(10.0, 12.0), |ui| self.queue_panel(ui));
                     body.max.x = queue.left() - g;
                 }
-                let fill = if full { ui::PANEL_CLEAR } else { ui::PANEL };
+                let fill = if full { ui::panel_clear() } else { ui::panel() };
                 // little side padding here: the scrollbar sits near the card edge,
                 // the content gets its own margin inside the scroll area
                 section(ui, "main", body, Some(fill), egui::vec2(8.0, 18.0), |ui| {
@@ -4617,7 +4671,7 @@ fn track_row(
     let mid = rect.center().y;
     let num_pos = egui::pos2(rect.left() + 24.0, mid);
     if is_current {
-        playing_bars(ui, num_pos, 16.0, ACCENT, &ctx.bars, ctx.playing);
+        playing_bars(ui, num_pos, 16.0, accent(), &ctx.bars, ctx.playing);
     } else if hovered {
         ui::paint_icon(painter, num_pos, icons::PLAY, 15.0, ui::TEXT, ui::fill_family());
     } else {
@@ -4655,7 +4709,7 @@ fn track_row(
     );
     child.spacing_mut().item_spacing.y = 1.0;
     let title = RichText::new(&track.title).size(14.5);
-    let title = if is_current { title.color(ACCENT).strong() } else { title };
+    let title = if is_current { title.color(accent()).strong() } else { title };
     child.add(egui::Label::new(title).truncate());
     if let Some(artist) = artist_links(&mut child, &track.artist_list(), 12.5, TEXT_DIM) {
         *action = Some((track.clone(), TrackAction::OpenArtist(artist)));
@@ -4694,7 +4748,7 @@ fn track_row(
     if liked || hovered || heart.hovered() {
         pointer_on_hover(&heart);
         let color = if liked {
-            ACCENT
+            accent()
         } else if heart.hovered() {
             ui::TEXT
         } else {
@@ -4812,7 +4866,7 @@ fn queue_row(
     );
     child.spacing_mut().item_spacing.y = 1.0;
     let title = RichText::new(&track.title).size(14.0);
-    child.add(egui::Label::new(if current { title.color(ACCENT).strong() } else { title }).truncate());
+    child.add(egui::Label::new(if current { title.color(accent()).strong() } else { title }).truncate());
     child.add(egui::Label::new(RichText::new(track.artist_name()).size(12.0).color(TEXT_DIM)).truncate());
 
     let mut result = QueueClick::None;
@@ -4871,7 +4925,7 @@ fn import_row(
     }
     let mid = rect.center().y;
     let (glyph, family, color) = if item.selected {
-        (icons::CHECK_SQUARE, ui::fill_family(), ACCENT)
+        (icons::CHECK_SQUARE, ui::fill_family(), accent())
     } else {
         (icons::SQUARE, egui::FontFamily::Proportional, if selectable { TEXT_DIM } else { ui::LINE })
     };
@@ -5030,7 +5084,7 @@ fn overlay_play(ui: &mut egui::Ui, center: egui::Pos2, radius: f32, pause: bool,
     let r = if resp.hovered() { radius + 1.5 } else { radius };
     let painter = ui.painter();
     painter.circle_filled(center + egui::vec2(0.0, 1.5), r, Color32::from_black_alpha(70));
-    painter.circle_filled(center, r, ACCENT);
+    painter.circle_filled(center, r, accent());
     let glyph = if pause { icons::PAUSE } else { icons::PLAY };
     ui::paint_icon(painter, center, glyph, radius * 0.95, BG, ui::fill_family());
     resp
@@ -5157,7 +5211,7 @@ fn media_card(
             action = Some(PlAction::Play);
         }
     } else if st.playing_here {
-        ui.painter().circle_filled(btn_center, 17.0, ACCENT);
+        ui.painter().circle_filled(btn_center, 17.0, accent());
         playing_bars(ui, btn_center, 17.0, BG, &st.bars, st.playing);
     }
 
@@ -5172,7 +5226,7 @@ fn media_card(
     );
     child.spacing_mut().item_spacing.y = 1.0;
     let t = RichText::new(title).strong().size(13.5);
-    child.add(egui::Label::new(if st.playing_here { t.color(ACCENT) } else { t }).truncate());
+    child.add(egui::Label::new(if st.playing_here { t.color(accent()) } else { t }).truncate());
     child.add(egui::Label::new(RichText::new(subtitle).size(12.0).color(TEXT_DIM)).truncate());
 
     resp.context_menu(|ui| playlist_menu(ui, st, &mut action));
@@ -5187,7 +5241,7 @@ fn media_card(
 #[allow(clippy::too_many_arguments)]
 /// A square (or wide) button tile on the top bar. Dark and nearly opaque, so
 /// the icon stays readable on every wallpaper colour.
-/// A round glass button of the header.
+/// A rounded-square glass button of the header.
 fn top_tile(
     ui: &egui::Ui,
     tile: egui::Rect,
@@ -5204,17 +5258,48 @@ fn top_tile(
         Color32::from_rgba_unmultiplied(19, 20, 30, 215)
     };
     let painter = ui.painter();
-    let (center, radius) = (tile.center(), tile.width() / 2.0);
-    painter.circle_filled(center, radius, fill);
+    let radius = egui::CornerRadius::same(14);
+    painter.rect_filled(tile, radius, fill);
     let edge = if active {
-        ui::with_alpha(ACCENT, 150)
+        ui::with_alpha(accent(), 150)
     } else if hovered {
-        ui::with_alpha(ACCENT, 90)
+        ui::with_alpha(accent(), 90)
     } else {
         ui::EDGE
     };
-    painter.circle_stroke(center, radius - 0.5, egui::Stroke::new(1.0_f32, edge));
-    ui::paint_icon(painter, center, icon, size, color, family);
+    painter.rect_stroke(tile, radius, egui::Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
+    ui::paint_icon(painter, tile.center(), icon, size, color, family);
+}
+
+/// The home entry at the top of the library: a tile like the covers below it, with its name when open.
+fn home_row(ui: &mut egui::Ui, active: bool, reveal: f32) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 58.0), egui::Sense::click());
+    pointer_on_hover(&resp);
+    let resp = if reveal < 0.5 { resp.on_hover_text("Home") } else { resp };
+    let hovered = ui.rect_contains_pointer(rect);
+    if active {
+        ui.painter().rect_filled(rect, 10.0, CARD_HOVER);
+    } else if hovered {
+        ui.painter().rect_filled(rect, 10.0, CARD);
+    }
+    let art_x = ((LIBRARY_COLLAPSED - 16.0 - 46.0) * 0.5).floor();
+    let art = egui::Rect::from_min_size(rect.min + egui::vec2(art_x, 6.0), egui::vec2(46.0, 46.0));
+    let fill = if active { ui::with_alpha(accent(), 46) } else { CARD_HOVER };
+    ui.painter().rect_filled(art, 8.0, fill);
+    ui.painter().rect_stroke(art, 8.0, egui::Stroke::new(1.0_f32, if active { ui::with_alpha(accent(), 140) } else { ui::EDGE }), egui::StrokeKind::Inside);
+    let (color, family) = if active { (accent(), ui::fill_family()) } else { (ui::TEXT, egui::FontFamily::Proportional) };
+    ui::paint_icon(ui.painter(), art.center(), icons::HOUSE, 24.0, color, family);
+    if reveal > 0.05 {
+        let fade = ui::with_alpha(if active { accent() } else { ui::TEXT }, (reveal.clamp(0.0, 1.0) * 255.0) as u8);
+        ui.painter().text(
+            egui::pos2(art.right() + 10.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            "Home",
+            egui::FontId::proportional(15.0),
+            fade,
+        );
+    }
+    resp.clicked()
 }
 
 fn library_row(
@@ -5270,10 +5355,10 @@ fn library_row(
                 action = Some(PlAction::Play);
             }
         } else if st.playing_here {
-            playing_bars(ui, art.center(), 22.0, ACCENT, &st.bars, st.playing);
+            playing_bars(ui, art.center(), 22.0, accent(), &st.bars, st.playing);
         }
     } else if st.playing_here {
-        playing_bars(ui, art.center(), 22.0, ACCENT, &st.bars, st.playing);
+        playing_bars(ui, art.center(), 22.0, accent(), &st.bars, st.playing);
     }
 
     let text_rect = egui::Rect::from_min_max(
@@ -5289,7 +5374,7 @@ fn library_row(
     // names fade in while the sidebar slides open
     let fade = |c: Color32| ui::with_alpha(c, (reveal.clamp(0.0, 1.0) * 255.0) as u8);
     let highlight = selected || st.playing_here;
-    let t = RichText::new(title).size(14.0).color(fade(if highlight { ACCENT } else { ui::TEXT }));
+    let t = RichText::new(title).size(14.0).color(fade(if highlight { accent() } else { ui::TEXT }));
     child.add(egui::Label::new(if highlight { t.strong() } else { t }).truncate());
     child.add(egui::Label::new(RichText::new(subtitle).size(12.0).color(fade(TEXT_DIM))).truncate());
 
@@ -5429,6 +5514,7 @@ mod debug_shot {
                 }
                 self.settings_tab = match std::env::var("TIDALFAST_SHOT_TAB").as_deref() {
                     Ok("equalizer") => super::SettingsTab::Equalizer,
+                    Ok("appearance") => super::SettingsTab::Appearance,
                     Ok("discord") => super::SettingsTab::Discord,
                     Ok("overlay") => super::SettingsTab::Overlay,
                     Ok("system") => super::SettingsTab::System,

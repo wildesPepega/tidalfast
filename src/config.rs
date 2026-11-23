@@ -29,6 +29,10 @@ pub struct Settings {
     pub tray: bool,
     /// Handle `spotify:` and `tidal:` links (browsers offer to open them in tidalfast).
     pub link_handler: bool,
+    /// Colour the interface (accent, panels, menus) after the playing song's cover.
+    pub theme_from_cover: bool,
+    /// The blurred cover and its colours behind the app.
+    pub cover_backdrop: bool,
     /// Serve the now-playing overlay page on localhost, and the port for it.
     pub overlay: bool,
     pub overlay_port: u16,
@@ -83,6 +87,8 @@ impl Default for Settings {
             media_keys: true,
             tray: false,
             link_handler: true,
+            theme_from_cover: true,
+            cover_backdrop: true,
             overlay: false,
             overlay_port: 7788,
             overlay_lan: false,

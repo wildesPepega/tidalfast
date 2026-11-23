@@ -11,7 +11,7 @@ use crate::eq::{
     MIN_FREQ, MIN_Q, NUM_BANDS, SPEC_BINS,
 };
 use crate::ui::{
-    card, pill, pointer_on_hover, with_alpha, ACCENT, BG, CARD_HOVER, DANGER, LINE, OK, TEXT,
+    card, pill, pointer_on_hover, with_alpha, accent, BG, CARD_HOVER, DANGER, LINE, OK, TEXT,
     TEXT_DIM, WARN,
 };
 
@@ -288,7 +288,7 @@ impl App {
                     pos2(plot.left() + (i + 1) as f32 * bar_w + 0.6, plot.bottom()),
                 ),
                 0.0,
-                with_alpha(ACCENT, 34),
+                with_alpha(accent(), 34),
             );
         }
 

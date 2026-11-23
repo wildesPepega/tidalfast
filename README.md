@@ -18,6 +18,7 @@ No Electron, no web view, just a small binary.</p>
   <a href="docs/screenshots/playlist-closed.jpg"><img src="docs/screenshots/playlist-closed.jpg" width="49%" alt="Collapsed library"></a>
   <a href="docs/screenshots/search.jpg"><img src="docs/screenshots/search.jpg" width="49%" alt="Search"></a>
   <a href="docs/screenshots/artist.jpg"><img src="docs/screenshots/artist.jpg" width="49%" alt="Artist page"></a>
+  <a href="docs/screenshots/appearance.jpg"><img src="docs/screenshots/appearance.jpg" width="49%" alt="Appearance settings: the interface follows the cover"></a>
   <a href="docs/screenshots/equalizer.jpg"><img src="docs/screenshots/equalizer.jpg" width="49%" alt="Parametric equalizer"></a>
   <a href="docs/screenshots/overlay.jpg"><img src="docs/screenshots/overlay.jpg" width="49%" alt="Now-playing overlay in a recording"></a>
 </p>
@@ -33,6 +34,7 @@ No Electron, no web view, just a small binary.</p>
 - **Queue, shuffle and repeat**, with the last played track restored on startup.
 - **Gapless playback or crossfade** between tracks (length adjustable).
 - **10-band equalizer** with a live spectrum/meter display.
+- **Theme from the cover:** the accent colour, the glass panels, menus and settings take their colours from the playing song's cover, with a fallback to the default look for grey, very dark or very bright covers so everything stays readable. Both the interface colours and the blurred cover backdrop can be switched off in *Settings → Appearance*.
 - **Full-screen player:** the cover is a 3D plate that tilts towards your mouse; when the song changes, the next cover floods over it like a liquid (as long as your crossfade lasts). Synced lyrics are karaoke-style: the line being sung is bright, its words fill in as they are sung, and the column glides along (click a line to jump there). Credits are one tab away.
 - **Spotify playlist import:** paste a public Spotify playlist link, tidalfast matches the songs on TIDAL and creates a TIDAL playlist from them.
 - **Robust Spotify links:** track, album, artist and playlist links (also `spotify.link` short links and links inside pasted text) are converted via linkhop; if linkhop is down or doesn't know a link, tidalfast reads the Spotify page itself and matches it on TIDAL. Requests are retried automatically.

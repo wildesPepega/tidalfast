@@ -165,11 +165,7 @@ impl App {
                 }
 
                 ui.add_space(10.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.eq_new_name)
-                        .hint_text("Name for new preset")
-                        .desired_width(150.0),
-                );
+                crate::ui::glass_input(ui, egui::Id::new("eq_preset_name"), &mut self.eq_new_name, "Name for new preset", 190.0, 1, 14.0);
                 let name = self.eq_new_name.trim().to_string();
                 if ui
                     .add_enabled(!name.is_empty(), egui::Button::new("Save"))

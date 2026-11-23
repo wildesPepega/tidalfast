@@ -2891,20 +2891,10 @@ impl App {
                         });
                         ui.add_space(8.0);
                         ui.label(RichText::new("Title").size(12.0).color(TEXT_DIM));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut title)
-                                .margin(egui::vec2(10.0, 8.0))
-                                .desired_width(f32::INFINITY),
-                        );
+                        ui::glass_input(ui, egui::Id::new("edit_title"), &mut title, "", f32::INFINITY, 1, 15.0);
                         ui.add_space(6.0);
                         ui.label(RichText::new("Description").size(12.0).color(TEXT_DIM));
-                        ui.add(
-                            egui::TextEdit::multiline(&mut description)
-                                .hint_text("What is this playlist about?")
-                                .margin(egui::vec2(10.0, 8.0))
-                                .desired_rows(4)
-                                .desired_width(f32::INFINITY),
-                        );
+                        ui::glass_input(ui, egui::Id::new("edit_description"), &mut description, "What is this playlist about?", f32::INFINITY, 4, 14.5);
                         ui.add_space(10.0);
                         let ok = !title.trim().is_empty();
                         let (mut done, mut cancel) = (false, false);
@@ -2921,12 +2911,7 @@ impl App {
                     Dialog::Create { mut text } => {
                         ui.heading("New playlist");
                         ui.add_space(8.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut text)
-                                .hint_text("Playlist name")
-                                .margin(egui::vec2(10.0, 8.0))
-                                .desired_width(f32::INFINITY),
-                        );
+                        let resp = ui::glass_input(ui, egui::Id::new("create_name"), &mut text, "Playlist name", f32::INFINITY, 1, 15.0);
                         if !resp.has_focus() && !resp.lost_focus() {
                             resp.request_focus();
                         }
@@ -3196,12 +3181,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.label(RichText::new("IMPORT SPOTIFY PLAYLIST").size(11.5).strong().color(accent()));
                 ui.add_space(2.0);
-                ui.add(
-                    egui::TextEdit::singleline(&mut st.title)
-                        .font(egui::FontId::proportional(22.0))
-                        .margin(egui::vec2(10.0, 6.0))
-                        .desired_width(380.0),
-                );
+                ui::glass_input(ui, egui::Id::new("import_title"), &mut st.title, "", 380.0, 1, 21.0);
                 ui.add_space(4.0);
                 if done < total {
                     ui.add(
@@ -4001,15 +3981,12 @@ impl App {
                         3 => &mut format.hover,
                         _ => &mut format.button_label,
                     };
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(text)
-                            .hint_text(RichText::new(*hint).color(TEXT_DIM))
-                            .desired_width(ui.available_width().min(520.0)),
-                    );
+                    let width = ui.available_width().min(520.0);
+                    let resp = ui::glass_input(ui, egui::Id::new(("discord_field", i)), text, hint, width, 1, 14.5);
                     if resp.has_focus() {
                         self.discord_focus = i;
                     }
-                    ui.add_space(4.0);
+                    ui.add_space(6.0);
                 }
                 ui.add_space(4.0);
                 ui.checkbox(&mut self.cfg.discord_format.show_button, "Show the button");

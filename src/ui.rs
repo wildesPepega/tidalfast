@@ -564,7 +564,7 @@ pub fn apply_visuals(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = BG;
     v.window_fill = panel_solid();
-    v.extreme_bg_color = BG;
+    v.extreme_bg_color = lerp_color(panel_solid(), Color32::WHITE, 0.055);
     v.faint_bg_color = CARD;
     v.window_stroke = Stroke::new(1.0_f32, EDGE);
     v.window_corner_radius = CornerRadius::same(14);
@@ -799,6 +799,53 @@ pub fn glass_colors(hovered: bool, active: bool) -> (Color32, Color32) {
         with_alpha(lerp_color(Color32::WHITE, accent(), 0.5), 56)
     };
     (fill, edge)
+}
+
+/// A text field in the look of the search capsule: a glass field with a rounded edge that lights up
+/// in the accent when it has the focus. `rows` 1 is a single line; `width` may be infinite.
+#[allow(clippy::too_many_arguments)]
+pub fn glass_input(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, rows: usize, font_size: f32) -> Response {
+    let single = rows <= 1;
+    let height = if single { (font_size + 24.0).max(40.0) } else { rows as f32 * (font_size + 8.0) + 22.0 };
+    let width = if width.is_finite() { width } else { ui.available_width() };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let focused = ui.memory(|m| m.has_focus(id));
+    let hovered = ui.rect_contains_pointer(rect);
+
+    // a little lighter than the glass around it, with the accent seeping in while typing
+    let base = lerp_color(panel_solid(), Color32::WHITE, 0.055);
+    let fill = with_alpha(lerp_color(base, accent(), if focused { 0.09 } else { 0.0 }), 250);
+    let (stroke, edge) = if focused {
+        (1.5_f32, with_alpha(accent(), 210))
+    } else if hovered {
+        (1.0_f32, with_alpha(accent(), 100))
+    } else {
+        (1.0_f32, glass_colors(false, false).1)
+    };
+    let radius = CornerRadius::same(12);
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter().rect_stroke(rect, radius, Stroke::new(stroke, edge), egui::StrokeKind::Inside);
+
+    let inner = rect.shrink2(egui::vec2(14.0, if single { 0.0 } else { 10.0 }));
+    let edit = if single { egui::TextEdit::singleline(text) } else { egui::TextEdit::multiline(text).desired_rows(rows) };
+    let back = ui.interact(rect, id.with("frame"), Sense::click());
+    let resp = ui.put(
+        inner,
+        edit.id(id)
+            .frame(false)
+            .hint_text(egui::RichText::new(hint).color(TEXT_DIM))
+            .font(FontId::proportional(font_size))
+            .margin(egui::vec2(0.0, 0.0))
+            .vertical_align(if single { egui::Align::Center } else { egui::Align::Min })
+            .desired_width(inner.width()),
+    );
+    if back.clicked() {
+        resp.request_focus();
+    }
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    resp
 }
 
 /// A glass button with an icon and a label, the height of the segmented control.

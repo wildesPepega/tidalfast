@@ -13,6 +13,10 @@ use eframe::egui::{self, TextureId};
 use eframe::egui_glow;
 use eframe::glow::{self, HasContext};
 
+/// The shader's number of the explosion, and the least time it takes (seconds).
+const EXPLODE: i32 = 9;
+const EXPLODE_SECS: f32 = 3.6;
+
 /// How far the plate tilts at the edge of the cover (radians).
 const MAX_TILT: f32 = 0.30;
 /// How far beyond the cover the mouse still pulls (in cover widths): just a hair, so the plate
@@ -45,12 +49,14 @@ pub enum CoverEffect {
     Glitch,
     /// A clock hand wipes the new cover in.
     Iris,
+    /// The cover is blown up, falls apart into shards and puts itself together as the new one.
+    Explode,
     /// A different one every song.
     Random,
 }
 
 impl CoverEffect {
-    pub const ALL: [CoverEffect; 10] = [
+    pub const ALL: [CoverEffect; 11] = [
         CoverEffect::Liquid,
         CoverEffect::Ripple,
         CoverEffect::Dissolve,
@@ -60,6 +66,7 @@ impl CoverEffect {
         CoverEffect::Pixelate,
         CoverEffect::Glitch,
         CoverEffect::Iris,
+        CoverEffect::Explode,
         CoverEffect::Random,
     ];
 
@@ -74,6 +81,7 @@ impl CoverEffect {
             CoverEffect::Pixelate => "Pixelate",
             CoverEffect::Glitch => "Glitch",
             CoverEffect::Iris => "Clock wipe",
+            CoverEffect::Explode => "Explode",
             CoverEffect::Random => "Random",
         }
     }
@@ -90,6 +98,7 @@ impl CoverEffect {
             CoverEffect::Pixelate,
             CoverEffect::Glitch,
             CoverEffect::Iris,
+            CoverEffect::Explode,
         ];
         match self {
             CoverEffect::Random => {
@@ -152,6 +161,10 @@ impl Anim {
             }
             self.origin = origin_for(track);
             self.effect = effect.shader_id(track);
+            if self.effect == EXPLODE && self.secs > 0.0 {
+                // there is a lot going on: it needs time
+                self.secs = self.secs.max(EXPLODE_SECS);
+            }
         }
         if self.pending {
             if let Some(tex) = tex {
@@ -290,7 +303,14 @@ impl Cover3d {
         } else {
             0.0
         };
-        let rest = (1.0 - self.hover * 1.6).clamp(0.0, 1.0) * flip.cos().abs();
+        // (no shadow either while the cover is in pieces)
+        let blown = if self.anim.effect == EXPLODE && progress < 1.0 {
+            let s = |a: f32, b: f32, x: f32| (((x - a) / (b - a)).clamp(0.0, 1.0)).powi(2);
+            1.0 - s(0.04, 0.14, progress) * (1.0 - s(0.94, 1.0, progress))
+        } else {
+            1.0
+        };
+        let rest = (1.0 - self.hover * 1.6).clamp(0.0, 1.0) * flip.cos().abs() * blown;
         if rest > 0.01 {
             ui.painter().add(
                 egui::epaint::Shadow {
@@ -303,8 +323,21 @@ impl Cover3d {
             );
         }
 
-        let outer = rect.expand(rect.width() * MARGIN);
+        // the explosion needs room around the cover (but not beyond the panel it sits in)
+        let exploding = self.anim.effect == EXPLODE && progress < 1.0;
+        let margin = if exploding { 1.0 } else { MARGIN };
+        let outer = rect.expand(rect.width() * margin).intersect(ui.clip_rect());
         let ppp = ctx.pixels_per_point();
+        let offset = rect.center() - outer.center();
+        // the whole picture jolts: a tremble while the charge builds, a kick at the blast
+        let shake = if exploding {
+            let t = now as f32;
+            let amp = 2.5 * (progress / 0.14).clamp(0.0, 1.0).powi(2) * (1.0 - (progress / 0.14).floor().min(1.0))
+                + 16.0 * (-(progress - 0.14).max(0.0) * 16.0).exp() * (progress >= 0.14) as i32 as f32;
+            [amp * (t * 93.0).sin() * ppp, amp * (t * 77.0).cos() * ppp]
+        } else {
+            [0.0, 0.0]
+        };
         let params = Params {
             size_px: rect.width() * ppp,
             rot: [self.tilt.y * MAX_TILT, self.tilt.x * MAX_TILT],
@@ -316,6 +349,8 @@ impl Cover3d {
             time: now as f32,
             effect: self.anim.effect,
             flip,
+            center: [offset.x * ppp, -offset.y * ppp],
+            shake,
         };
         let state = self.gpu.clone();
         ui.painter().add(egui::PaintCallback {
@@ -357,11 +392,17 @@ struct Params {
     effect: i32,
     /// Extra turn of the plate around its vertical axis (the flip effect).
     flip: f32,
+    /// Where the cover's middle is relative to the middle of the area we draw into (pixels, y up).
+    center: [f32; 2],
+    /// A jolt of the whole picture, pixels.
+    shake: [f32; 2],
 }
 
 struct Gpu {
     gl: Arc<glow::Context>,
     program: glow::Program,
+    shard: glow::Program,
+    fx: glow::Program,
     vao: glow::VertexArray,
     /// egui keeps its textures in sRGB: sampling gives linear values.
     srgb_textures: bool,
@@ -376,6 +417,8 @@ uniform float u_size;  // edge of the cover, pixels
 uniform vec2 u_rot;    // pitch, yaw
 uniform float u_zoom;
 uniform float u_flip;
+uniform vec2 u_center;
+uniform vec2 u_shake;
 out vec2 uv;
 void main() {
     vec2 c = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
@@ -387,7 +430,7 @@ void main() {
     q = vec3(q.x * cy, q.y, -q.x * sy);               // yaw: the side under the mouse leans away
     q = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx); // pitch
     float d = u_size * 3.0;                            // distance of the camera
-    gl_Position = vec4(q.xy / (u_view * 0.5), 0.0, (d - q.z) / d);
+    gl_Position = vec4((q.xy + u_center + u_shake) / (u_view * 0.5), 0.0, (d - q.z) / d);
 }
 "#;
 
@@ -583,6 +626,255 @@ void main() {
 }
 "#;
 
+
+// The explosion. The plate is cut into a jittered lattice of triangles ("shards"); each one has its
+// own random push, spin and timing, so the whole thing is a function of progress `u_p` alone:
+//   0.00 - 0.14   the charge builds: cracks glow, the plate trembles
+//   0.14          blast: flash, shock rings, sparks, the shards fly off, spinning and shrinking
+//   0.50          the new cover takes the shards' faces, unseen in the chaos
+//   0.58 - 0.95   the shards come back in a swirl, one after the other, and snap into place
+//   0.95 - 1.00   a last glint
+const SHARD_VS: &str = r#"
+uniform vec2 u_view;
+uniform vec2 u_center;
+uniform vec2 u_shake;
+uniform float u_size;
+uniform vec2 u_rot;
+uniform float u_zoom;
+uniform float u_p;
+uniform vec2 u_origin;
+uniform float u_time;
+out vec2 uv;
+out vec3 bary;
+flat out float which;
+out float alpha_s;
+out float shade;
+out float hot;
+out float landing;
+out float heat;
+
+const int N = 16;
+const float PI = 3.14159265;
+
+float h11(float n) { return fract(sin(n * 127.1 + 31.7) * 43758.5453); }
+
+vec2 lattice(int i, int j) {
+    vec2 p = vec2(float(i), float(j)) / float(N);
+    if (i > 0 && i < N && j > 0 && j < N) {
+        vec2 r = vec2(h11(float(i * 131 + j * 17 + 3)), h11(float(i * 57 + j * 211 + 9))) - 0.5;
+        p += r * 0.62 / float(N);
+    }
+    return p;
+}
+
+vec3 rot(vec3 v, vec3 a) {
+    float cx = cos(a.x), sx = sin(a.x), cy = cos(a.y), sy = sin(a.y), cz = cos(a.z), sz = sin(a.z);
+    v = vec3(v.x, v.y * cx - v.z * sx, v.y * sx + v.z * cx);
+    v = vec3(v.x * cy + v.z * sy, v.y, -v.x * sy + v.z * cy);
+    return vec3(v.x * cz - v.y * sz, v.x * sz + v.y * cz, v.z);
+}
+
+void main() {
+    int tri = gl_VertexID / 3;
+    int corner = gl_VertexID - tri * 3;
+    int cell = tri / 2;
+    int half_ = tri - cell * 2;
+    int ci = cell - (cell / N) * N;
+    int cj = cell / N;
+    // the diagonal alternates from cell to cell
+    bool flip = ((ci + cj) & 1) == 1;
+    ivec2 a = ivec2(ci, cj), b = ivec2(ci + 1, cj), c = ivec2(ci + 1, cj + 1), d = ivec2(ci, cj + 1);
+    ivec2 t0, t1, t2;
+    if (!flip) {
+        if (half_ == 0) { t0 = a; t1 = b; t2 = c; } else { t0 = a; t1 = c; t2 = d; }
+    } else {
+        if (half_ == 0) { t0 = a; t1 = b; t2 = d; } else { t0 = b; t1 = c; t2 = d; }
+    }
+    vec2 P0 = lattice(t0.x, t0.y), P1 = lattice(t1.x, t1.y), P2 = lattice(t2.x, t2.y);
+    vec2 P = corner == 0 ? P0 : (corner == 1 ? P1 : P2);
+    vec2 cen = (P0 + P1 + P2) / 3.0;
+
+    float id = float(tri);
+    float h1 = h11(id + 1.0), h2 = h11(id + 2.0), h3 = h11(id + 3.0), h4 = h11(id + 4.0), h5 = h11(id + 5.0), h6 = h11(id + 6.0);
+    float p = u_p;
+
+    // how far this shard is from home: out with the blast, back in a swirl
+    float up = clamp((p - 0.14 - 0.03 * h5) / 0.30, 0.0, 1.0);
+    float up_e = 1.0 - pow(1.0 - up, 2.4);
+    float down = clamp((p - (0.58 + 0.14 * h3)) / 0.23, 0.0, 1.0);
+    float down_e = down < 0.5 ? 4.0 * down * down * down : 1.0 - pow(-2.0 * down + 2.0, 3.0) / 2.0;
+    float S = up_e * (1.0 - down_e);
+
+    vec2 blast = vec2(0.5) + (u_origin - 0.5) * 0.35;
+    vec2 to_c = cen - blast;
+    float dist = length(to_c);
+    vec2 dir = dist > 1e-4 ? to_c / dist : vec2(cos(id), sin(id));
+    dir = normalize(dir + (vec2(h1, h2) - 0.5) * 0.55);
+    float speed = (0.38 + 0.62 * h4) * (1.2 - 0.5 * clamp(dist, 0.0, 1.0));
+    vec2 away = dir * speed + vec2(0.0, 0.2 + 0.7 * h6);   // uv y points down: they fall as they fly
+    float zaway = (h2 - 0.3) * 1.2;                         // mostly towards the viewer
+    vec2 perp = vec2(-dir.y, dir.x);
+    float swirl = sin(PI * down_e) * (h5 - 0.5) * 1.1;
+    vec2 disp = (away + perp * swirl) * S;
+    vec3 spin = (vec3(h1, h2, h3) - 0.5) * vec3(14.0, 14.0, 18.0);
+    vec3 ang = spin * S;
+    float scale = 1.0 - 0.3 * S;
+
+    vec3 r3 = rot(vec3((P - cen) * vec2(1.0, -1.0), 0.0) * scale, ang);
+    vec3 world = vec3(cen.x - 0.5 + disp.x, -(cen.y - 0.5) - disp.y, zaway * S * 0.6) + r3;
+
+    // the charge builds: everything trembles a little
+    float wind = smoothstep(0.0, 0.14, p) * (1.0 - step(0.14, p));
+    float tick = floor(u_time * 45.0);
+    world.xy += (vec2(h11(id + tick), h11(id + 7.0 + tick)) - 0.5) * 0.010 * wind;
+
+    // the same lean and perspective as the whole plate
+    vec3 q = vec3(world.xy * u_size * u_zoom, world.z * u_size);
+    float cy = cos(u_rot.y), sy = sin(u_rot.y), cx = cos(u_rot.x), sx = sin(u_rot.x);
+    q = vec3(q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy);
+    q = vec3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);
+    float dcam = u_size * 3.0;
+    gl_Position = vec4((q.xy + u_center + u_shake) / (u_view * 0.5), 0.0, max(dcam - q.z, dcam * 0.2) / dcam);
+
+    uv = P;
+    bary = vec3(corner == 0 ? 1.0 : 0.0, corner == 1 ? 1.0 : 0.0, corner == 2 ? 1.0 : 0.0);
+    which = p > 0.52 + 0.05 * h4 ? 1.0 : 0.0;
+    alpha_s = 1.0 - 0.3 * S;
+    vec3 n = rot(vec3(0.0, 0.0, 1.0), ang);
+    shade = 0.55 + 0.6 * abs(dot(n, normalize(vec3(-0.35, 0.55, 0.75)))) * (0.5 + 0.5 * (1.0 - S * 0.4));
+    hot = exp(-pow((p - 0.18) / 0.11, 2.0)) * (0.3 + 0.7 * S);
+    landing = pow(smoothstep(0.7, 1.0, down), 3.0) * smoothstep(1.0, 0.95, p);
+    heat = wind;
+}
+"#;
+
+const SHARD_FS: &str = r#"
+in vec2 uv;
+in vec3 bary;
+flat in float which;
+in float alpha_s;
+in float shade;
+in float hot;
+in float landing;
+in float heat;
+out vec4 o;
+uniform sampler2D u_from;
+uniform sampler2D u_to;
+uniform float u_size;
+uniform int u_srgb;
+uniform float u_glare;
+uniform vec2 u_light;
+
+vec3 gamma(vec3 c) {
+    bvec3 low = lessThan(c, vec3(0.0031308));
+    return mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, vec3(low));
+}
+vec3 sample_tex(sampler2D s, vec2 p) {
+    vec3 c = texture(s, clamp(p, vec2(0.002), vec2(0.998))).rgb;
+    return u_srgb == 1 ? gamma(c) : c;
+}
+
+void main() {
+    // the rounded corners of the plate, as in the normal picture
+    vec2 q = abs(uv - 0.5) - (0.5 - 0.06);
+    float sdf = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.06;
+    float alpha = clamp(0.5 - sdf * u_size / 1.2, 0.0, 1.0) * alpha_s;
+    if (alpha <= 0.0) { o = vec4(0.0); return; }
+    vec3 col = (which > 0.5 ? sample_tex(u_to, uv) : sample_tex(u_from, uv));
+    float edge = 1.0 - smoothstep(0.0, 0.07, min(bary.x, min(bary.y, bary.z)));
+    col *= shade;
+    // glowing cracks while the charge builds, white-hot edges at the blast, a flash as pieces land
+    col += vec3(1.0, 0.45, 0.12) * heat * (0.15 + 2.2 * edge);
+    col += vec3(1.0, 0.62, 0.25) * hot * (0.30 + 1.6 * edge);
+    col += vec3(1.0, 0.95, 0.85) * landing * (0.35 + 1.2 * edge);
+    col += vec3(1.0) * u_glare * pow(smoothstep(0.95, 0.0, distance(uv, u_light)), 2.2);
+    col = clamp(col, 0.0, 1.0);
+    o = vec4(col * alpha, alpha);
+}
+"#;
+
+// Light on top, added to the picture: the flash, two shock rings, and sparks.
+const FX_VS: &str = r#"
+uniform int u_pass;
+uniform vec2 u_view;
+uniform vec2 u_center;
+uniform vec2 u_shake;
+uniform float u_size;
+uniform float u_p;
+uniform vec2 u_origin;
+out vec2 cover;
+out vec4 spark;
+out vec2 quad;
+
+float h11(float n) { return fract(sin(n * 127.1 + 31.7) * 43758.5453); }
+
+void main() {
+    spark = vec4(0.0);
+    cover = vec2(0.0);
+    quad = vec2(0.0);
+    if (u_pass == 0) {
+        vec2 pq = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+        gl_Position = vec4(pq * 2.0 - 1.0, 0.0, 1.0);
+        // where this corner lies in cover units (y up, the cover's middle is 0)
+        cover = ((pq * 2.0 - 1.0) * u_view * 0.5 - u_center) / u_size;
+        return;
+    }
+    int s = gl_VertexID / 6;
+    int k = gl_VertexID - s * 6;
+    vec2 corner = k == 0 ? vec2(-1.0, -1.0) : k == 1 ? vec2(1.0, -1.0) : k == 2 ? vec2(1.0, 1.0)
+                : k == 3 ? vec2(-1.0, -1.0) : k == 4 ? vec2(1.0, 1.0) : vec2(-1.0, 1.0);
+    float id = float(s);
+    float h1 = h11(id + 1.0), h2 = h11(id + 2.0), h3 = h11(id + 3.0), h4 = h11(id + 4.0), h5 = h11(id + 5.0);
+    float start = 0.14 + 0.05 * h2;
+    float life = 0.30 + 0.30 * h3;
+    float age = (u_p - start) / life;
+    if (age < 0.0 || age > 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    float a = h1 * 6.2831853;
+    float speed = (0.5 + 1.6 * h4) * u_size;
+    float ease = 1.0 - pow(1.0 - age, 2.2);
+    vec2 origin_px = vec2(u_origin.x - 0.5, -(u_origin.y - 0.5)) * 0.35 * u_size + u_center;
+    vec2 pos = origin_px + vec2(cos(a), sin(a)) * speed * ease - vec2(0.0, 0.55 * u_size * age * age);
+    float size = (2.0 + 5.0 * h5) * (1.0 - age * 0.8);
+    pos += corner * size;
+    gl_Position = vec4((pos + u_shake) / (u_view * 0.5), 0.0, 1.0);
+    quad = corner;
+    float fade = (1.0 - age) * (1.0 - age);
+    vec3 warm = mix(vec3(1.0, 0.95, 0.75), vec3(1.0, 0.45, 0.12), clamp(age * 1.4, 0.0, 1.0));
+    spark = vec4(warm * fade * 1.4, 1.0);
+}
+"#;
+
+const FX_FS: &str = r#"
+in vec2 cover;
+in vec4 spark;
+in vec2 quad;
+out vec4 o;
+uniform int u_pass;
+uniform float u_p;
+uniform vec2 u_origin;
+
+void main() {
+    if (u_pass != 0) {
+        float r = length(quad);
+        float soft = smoothstep(1.0, 0.0, r);
+        o = vec4(spark.rgb * soft * soft, 1.0);
+        return;
+    }
+    vec2 org = vec2(u_origin.x - 0.5, -(u_origin.y - 0.5)) * 0.35;
+    float r = length(cover - org);
+    float p = u_p;
+    float flash = exp(-pow((p - 0.145) / 0.022, 2.0)) * exp(-r * r * 7.0) * 2.2;
+    float since = max(p - 0.14, 0.0);
+    float ring = exp(-pow((r - since * 2.6) / 0.05, 2.0)) * (1.0 - smoothstep(0.14, 0.5, p)) * step(0.14, p) * 0.9;
+    float ring2 = exp(-pow((r - since * 1.5) / 0.09, 2.0)) * (1.0 - smoothstep(0.14, 0.42, p)) * step(0.16, p) * 0.35;
+    float charge = exp(-r * r * 5.0) * smoothstep(0.02, 0.14, p) * (1.0 - step(0.14, p)) * 0.5;
+    float glint = exp(-pow((p - 0.955) / 0.03, 2.0)) * smoothstep(0.75, 0.0, length(cover)) * 0.7;
+    vec3 col = vec3(1.0, 0.82, 0.55) * flash + vec3(1.0, 0.7, 0.35) * ring + vec3(1.0, 0.8, 0.6) * ring2
+             + vec3(1.0, 0.45, 0.12) * charge + vec3(1.0, 0.97, 0.9) * glint;
+    o = vec4(col, 1.0);
+}
+"#;
+
 impl Gpu {
     fn new(gl: Arc<glow::Context>) -> Result<Self, String> {
         let version = gl.version().clone();
@@ -601,8 +893,51 @@ impl Gpu {
         let srgb_textures = version.is_embedded || gl.supported_extensions().iter().any(|e| e.contains("sRGB"));
         unsafe {
             let program = compile(&gl, header, VERTEX, FRAGMENT)?;
+            let shard = compile(&gl, header, SHARD_VS, SHARD_FS)?;
+            let fx = compile(&gl, header, FX_VS, FX_FS)?;
             let vao = gl.create_vertex_array()?;
-            Ok(Self { gl, program, vao, srgb_textures })
+            Ok(Self { gl, program, shard, fx, vao, srgb_textures })
+        }
+    }
+
+    /// Set every uniform the program has (the programs share the names).
+    unsafe fn uniforms(&self, program: glow::Program, p: &Params, view: [f32; 2], pass: i32) {
+        let gl = &self.gl;
+        unsafe {
+            gl.use_program(Some(program));
+            let f1 = |name: &str, v: f32| {
+                if let Some(loc) = gl.get_uniform_location(program, name) {
+                    gl.uniform_1_f32(Some(&loc), v);
+                }
+            };
+            let f2 = |name: &str, v: [f32; 2]| {
+                if let Some(loc) = gl.get_uniform_location(program, name) {
+                    gl.uniform_2_f32(Some(&loc), v[0], v[1]);
+                }
+            };
+            let i1 = |name: &str, v: i32| {
+                if let Some(loc) = gl.get_uniform_location(program, name) {
+                    gl.uniform_1_i32(Some(&loc), v);
+                }
+            };
+            f2("u_view", view);
+            f2("u_center", p.center);
+            f2("u_shake", p.shake);
+            f1("u_size", p.size_px);
+            f2("u_rot", p.rot);
+            f1("u_zoom", p.zoom);
+            f1("u_progress", p.progress);
+            f1("u_p", p.progress);
+            f2("u_origin", p.origin);
+            f1("u_time", p.time);
+            f2("u_light", p.light);
+            f1("u_glare", p.glare);
+            i1("u_effect", p.effect);
+            f1("u_flip", p.flip);
+            i1("u_srgb", self.srgb_textures as i32);
+            i1("u_pass", pass);
+            i1("u_from", 0);
+            i1("u_to", 1);
         }
     }
 
@@ -612,48 +947,31 @@ impl Gpu {
             return;
         }
         let gl = &self.gl;
+        let view = [vw as f32, vh as f32];
         unsafe {
             gl.viewport(vx, vy, vw, vh);
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::CULL_FACE);
             gl.enable(glow::BLEND);
             gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-            gl.use_program(Some(self.program));
-            let f1 = |name: &str, v: f32| {
-                if let Some(loc) = gl.get_uniform_location(self.program, name) {
-                    gl.uniform_1_f32(Some(&loc), v);
-                }
-            };
-            let f2 = |name: &str, v: [f32; 2]| {
-                if let Some(loc) = gl.get_uniform_location(self.program, name) {
-                    gl.uniform_2_f32(Some(&loc), v[0], v[1]);
-                }
-            };
-            let i1 = |name: &str, v: i32| {
-                if let Some(loc) = gl.get_uniform_location(self.program, name) {
-                    gl.uniform_1_i32(Some(&loc), v);
-                }
-            };
-            f2("u_view", [vw as f32, vh as f32]);
-            f1("u_size", p.size_px);
-            f2("u_rot", p.rot);
-            f1("u_zoom", p.zoom);
-            f1("u_progress", p.progress);
-            f2("u_origin", p.origin);
-            f1("u_time", p.time);
-            f2("u_light", p.light);
-            f1("u_glare", p.glare);
-            i1("u_effect", p.effect);
-            f1("u_flip", p.flip);
-            i1("u_srgb", self.srgb_textures as i32);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(from));
-            i1("u_from", 0);
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_2D, Some(to));
-            i1("u_to", 1);
             gl.bind_vertex_array(Some(self.vao));
-            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            if p.effect == EXPLODE && p.progress < 1.0 {
+                // the shards, then light on top (added to what is there)
+                self.uniforms(self.shard, p, view, 0);
+                gl.draw_arrays(glow::TRIANGLES, 0, SHARD_VERTICES);
+                gl.blend_func(glow::ONE, glow::ONE);
+                self.uniforms(self.fx, p, view, 0);
+                gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                self.uniforms(self.fx, p, view, 1);
+                gl.draw_arrays(glow::TRIANGLES, 0, SPARKS * 6);
+            } else {
+                self.uniforms(self.program, p, view, 0);
+                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            }
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_2D, None);
@@ -663,6 +981,10 @@ impl Gpu {
         }
     }
 }
+
+/// Triangles of the shattered plate (a 16 × 16 lattice, two triangles per cell), and sparks.
+const SHARD_VERTICES: i32 = 16 * 16 * 2 * 3;
+const SPARKS: i32 = 260;
 
 unsafe fn compile(gl: &glow::Context, header: &str, vertex: &str, fragment: &str) -> Result<glow::Program, String> {
     unsafe {
@@ -782,12 +1104,31 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for track in 0..200u64 {
             let id = CoverEffect::Random.shader_id(track);
-            assert!((0..9).contains(&id));
+            assert!((0..10).contains(&id));
             assert_eq!(id, CoverEffect::Random.shader_id(track));
             seen.insert(id);
         }
-        assert!(seen.len() >= 7, "{seen:?}");
+        assert!(seen.len() >= 8, "{seen:?}");
+        assert_eq!(CoverEffect::Explode.shader_id(1), EXPLODE);
         assert_eq!(CoverEffect::Liquid.shader_id(5), 0);
         assert_eq!(CoverEffect::Iris.shader_id(5), 8);
+    }
+
+    #[test]
+    fn the_explosion_takes_at_least_its_time_even_when_asked_for_less() {
+        let mut a = Anim::default();
+        a.update(0.0, 1, tex(1), 1.4, 0.0, CoverEffect::Explode);
+        let (_, _, p) = a.update(10.0, 2, tex(2), 1.4, 0.0, CoverEffect::Explode);
+        assert_eq!(p, 0.0);
+        let (_, _, p) = a.update(11.4, 2, tex(2), 1.4, 0.0, CoverEffect::Explode);
+        assert!(p < 0.45, "{p}: a 1.4 s call must not rush the explosion");
+        let (_, _, p) = a.update(10.0 + EXPLODE_SECS as f64 + 0.1, 2, tex(2), 1.4, 0.0, CoverEffect::Explode);
+        assert_eq!(p, 1.0);
+        // a longer crossfade makes it longer still
+        let mut b = Anim::default();
+        b.update(0.0, 1, tex(1), 1.4, 0.0, CoverEffect::Explode);
+        b.update(10.0, 2, tex(2), 8.0, 0.0, CoverEffect::Explode);
+        let (_, _, p) = b.update(14.0, 2, tex(2), 8.0, 0.0, CoverEffect::Explode);
+        assert!((p - 0.5).abs() < 1e-3, "{p}");
     }
 }

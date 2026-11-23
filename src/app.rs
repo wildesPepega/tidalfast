@@ -263,6 +263,9 @@ pub struct App {
     updater: Updater,
     update: UpdateState,
     overlay: crate::overlay::Overlay,
+    /// The cover of the full-screen player and how long the next flood of it should take.
+    cover3d: crate::cover3d::Cover3d,
+    cover_flood_secs: f32,
     #[cfg(target_os = "linux")]
     gsr_status: Option<String>,
     /// Cover image picked in the edit dialog: file dialog result and preview.
@@ -414,6 +417,8 @@ impl App {
             settings_tab: SettingsTab::Playback,
             lib_click: None,
             overlay: crate::overlay::Overlay::new(),
+            cover3d: Default::default(),
+            cover_flood_secs: 1.4,
             #[cfg(target_os = "linux")]
             gsr_status: None,
             updater: Updater::new(cc.egui_ctx.clone()),
@@ -765,6 +770,12 @@ impl App {
                         self.finished = false;
                         self.discord_track(&track, quality.clone());
                     }
+                    // the cover of the full-screen player floods over as long as the crossfade
+                    self.cover_flood_secs = if auto && self.cfg.transition == TransitionMode::Crossfade {
+                        self.cfg.crossfade_secs.clamp(1.0, 12.0)
+                    } else {
+                        1.4
+                    };
                     self.current = Some(*track);
                     self.duration = duration;
                     self.position = 0.0;
@@ -3298,12 +3309,12 @@ impl App {
             Some(u) if self.textures.contains_key(u) => Some(u.clone()),
             _ => track.cover_url(COVER_NOW),
         };
-        ui.painter().rect_filled(
-            cover_rect.translate(egui::vec2(0.0, 10.0)).expand(2.0),
-            16.0,
-            Color32::from_black_alpha(90),
-        );
-        paint_cover_r(ui, &self.textures, url.as_deref(), cover_rect, 14.0);
+        let tex = url.as_ref().and_then(|u| self.textures.get(u)).map(|t| t.id());
+        let textures = &self.textures;
+        self.cover3d.show(ui, cover_rect, track.id, tex, self.cover_flood_secs, |ui, rect| {
+            ui.painter().rect_filled(rect.translate(egui::vec2(0.0, 10.0)).expand(2.0), 16.0, Color32::from_black_alpha(90));
+            paint_cover_r(ui, textures, url.as_deref(), rect, 14.0);
+        });
 
         let text_rect = egui::Rect::from_min_size(
             egui::pos2(cover_rect.left(), cover_rect.bottom() + 16.0),
@@ -4268,6 +4279,10 @@ impl eframe::App for App {
         // Layout: floating glass cards on the wallpaper, all with the same gap
         // to each other and to the window edge. Every card clips its content.
         let full = self.now_open && self.current.is_some() && self.user.is_some();
+        if !full {
+            // closed: the next time it opens, no flood for a song that changed meanwhile
+            self.cover3d.reset();
+        }
         let logged_in = self.user.is_some();
         let show_player = logged_in || self.current.is_some();
         egui::CentralPanel::default()
@@ -5346,6 +5361,12 @@ mod debug_shot {
         /// `TIDALFAST_SHOT_AT=<seconds>`: where in the song the demo pretends to be.
         pub at: f64,
         pub started_play: bool,
+        /// `TIDALFAST_SHOT_MOUSE=0.8,0.3`: the mouse over the full-screen cover, as a fraction of it.
+        pub mouse: Option<(f32, f32)>,
+        /// `TIDALFAST_SHOT_SKIP=<seconds>`: skip to the next song after this long (shows the liquid).
+        pub skip_at: Option<f32>,
+        pub skipped: bool,
+        pub skip_by: usize,
         pub artist: Option<u64>,
         pub profile: bool,
         /// `TIDALFAST_SHOT_SIDEBAR=open|closed`
@@ -5365,6 +5386,12 @@ mod debug_shot {
                 queue: std::env::var("TIDALFAST_SHOT_QUEUE").is_ok(),
                 play: std::env::var("TIDALFAST_SHOT_PLAY").is_ok(),
                 open: std::env::var("TIDALFAST_SHOT_OPEN").ok().and_then(|v| v.parse().ok()),
+                mouse: std::env::var("TIDALFAST_SHOT_MOUSE").ok().and_then(|v| {
+                    let (a, b) = v.split_once(',')?;
+                    Some((a.parse().ok()?, b.parse().ok()?))
+                }),
+                skip_by: std::env::var("TIDALFAST_SHOT_SKIPBY").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
+                skip_at: std::env::var("TIDALFAST_SHOT_SKIP").ok().and_then(|v| v.parse().ok()),
                 at: std::env::var("TIDALFAST_SHOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
                 artist: std::env::var("TIDALFAST_SHOT_ARTIST").ok().and_then(|v| v.parse().ok()),
                 profile: std::env::var("TIDALFAST_SHOT_PROFILE").is_ok(),
@@ -5441,6 +5468,20 @@ mod debug_shot {
                     self.finished = false;
                     self.loading = None;
                     self.now_quality = "HI_RES_LOSSLESS".into();
+                }
+            }
+            if let Some((x, y)) = self.shot.mouse {
+                self.cover3d.debug_pointer = Some(egui::vec2(x, y));
+            }
+            if let Some(at) = self.shot.skip_at {
+                if !self.shot.skipped && started.elapsed().as_secs_f32() > at && !self.queue.is_empty() {
+                    self.shot.skipped = true;
+                    self.queue_index = (self.queue_index + self.shot.skip_by).min(self.queue.len() - 1);
+                    let track = self.queue[self.queue_index].clone();
+                    self.duration = track.duration as f64;
+                    self.position = 0.0;
+                    self.current = Some(track);
+                    self.cover_flood_secs = 3.0;
                 }
             }
             if crate::demo::enabled() && self.playing {

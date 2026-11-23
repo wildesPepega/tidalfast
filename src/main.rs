@@ -6,6 +6,7 @@ mod audio;
 mod cache;
 mod card;
 mod config;
+mod cover3d;
 #[cfg(debug_assertions)]
 mod demo;
 mod desktop;

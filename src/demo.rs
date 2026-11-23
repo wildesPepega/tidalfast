@@ -356,8 +356,12 @@ pub async fn worker(mut rx: UnboundedReceiver<Cmd>, ev: Sender<Ev>) {
                 let _ = ev.send(Ev::Radio { track_id, tracks });
             }
             Cmd::AlbumInfo { id } => {
-                let kind = catalog().albums.iter().find(|a| a.id == id).and_then(|a| a.kind.clone());
-                let _ = ev.send(Ev::AlbumKind { id, kind });
+                let meta = catalog().albums.iter().find(|a| a.id == id).map(|a| crate::presence::AlbumMeta {
+                    kind: a.kind.clone(),
+                    year: a.year().unwrap_or_default().to_string(),
+                    tracks: a.number_of_tracks.unwrap_or(0),
+                });
+                let _ = ev.send(Ev::AlbumMeta { id, meta });
             }
             Cmd::LoadTrackInfo { track_id } => {
                 let _ = ev.send(Ev::Lyrics { track_id, lyrics: lyrics() });

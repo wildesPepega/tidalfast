@@ -42,7 +42,7 @@ No Electron, no web view, just a small binary.</p>
 - **Spotify playlist import:** paste a public Spotify playlist link, tidalfast matches the songs on TIDAL and creates a TIDAL playlist from them.
 - **Robust Spotify links:** track, album, artist and playlist links (also `spotify.link` short links and links inside pasted text) are converted via linkhop; if linkhop is down or doesn't know a link, tidalfast reads the Spotify page itself and matches it on TIDAL. Requests are retried automatically.
 - **Link handler:** `tidal:` and `spotify:` links (for example clicked in Discord) open in the app.
-- **Discord Rich Presence:** shows what you listen to (title and artist, and whether it is a single, `EP: name` or `Album: name`), with cover, progress and a "Listen on TIDAL" button; optionally it stays while paused. Updates are debounced, rate-limit friendly and survive Discord restarts.
+- **Discord Rich Presence:** shows what you listen to (title and artist, and whether it is a single, `EP: name` or `Album: name`), with cover, progress and a "Listen on TIDAL" button; optionally it stays while paused. All texts can be your own: fields in *Settings → Discord* take templates with variables such as `{title}`, `{artist}`, `{album}`, `{release}`, `{year}`, `{tracks}`, `{duration}` and `{quality}`, with a live preview. Updates are debounced, rate-limit friendly and survive Discord restarts.
 - **Media keys and desktop media controls:** play/pause/next/previous/seek from your keyboard and from the media widgets of your desktop (MPRIS on Linux: KDE, GNOME, Waybar's `mpris` module, `playerctl`; System Media Transport Controls on Windows). Shows title, artist and cover.
 - **Tray icon:** StatusNotifierItem on Linux (KDE, Waybar, XFCE, … and GNOME with the AppIndicator extension), notification-area icon on Windows. Left click shows/hides the window, the menu has play/pause, next, previous and quit. Optionally keeps running in the tray when you close the window. Media keys and tray are configured in *Settings → System*.
 - **Updates:** checks GitHub for new releases (at startup and every few hours) and can download, verify (SHA-256) and install them itself, for the Linux binary, the AppImage and Windows; *Settings → System → Updates* has a switch for the check and for automatic installation.
@@ -101,6 +101,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 | `src/transition.rs` | Gapless/crossfade planning and the fade source |
 | `src/eq.rs` | Equalizer and spectrum analysis |
 | `src/discord.rs` | Discord Rich Presence worker |
+| `src/presence.rs` | The status texts: templates, variables, release type |
 | `src/import.rs`, `src/link.rs` | Spotify import and Spotify/TIDAL link parsing |
 | `src/demo.rs` | Debug builds only: the made-up music behind the screenshots |
 | `gsr-plugin/` | C plugin for GPU Screen Recorder that draws the overlay card into recordings |

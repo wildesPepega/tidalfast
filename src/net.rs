@@ -172,10 +172,11 @@ pub enum Ev {
         track_id: u64,
         groups: Vec<CreditGroup>,
     },
-    /// The release type of an album (`SINGLE`, `EP`, `ALBUM` …); `None` if it could not be found out.
-    AlbumKind {
+    /// What an album is (single, EP, album), when it came out and how many tracks it has;
+    /// `None` if it could not be found out.
+    AlbumMeta {
         id: u64,
-        kind: Option<String>,
+        meta: Option<crate::presence::AlbumMeta>,
     },
     /// Text for the clipboard.
     Copy(String),
@@ -383,14 +384,18 @@ async fn worker(
                 finish_playlist_edit(&mut client, &ev, result, &message).await;
             }
             Cmd::AlbumInfo { id } => {
-                let kind = match client.album_info(id).await {
-                    Ok(album) => album.kind,
+                let meta = match client.album_info(id).await {
+                    Ok(album) => Some(crate::presence::AlbumMeta {
+                        year: album.year().unwrap_or_default().to_string(),
+                        tracks: album.number_of_tracks.unwrap_or(0),
+                        kind: album.kind,
+                    }),
                     Err(e) => {
                         log::warn!("album info failed: {e:#}");
                         None
                     }
                 };
-                let _ = ev.send(Ev::AlbumKind { id, kind });
+                let _ = ev.send(Ev::AlbumMeta { id, meta });
             }
             Cmd::LoadTrackInfo { track_id } => {
                 let lyrics = client.lyrics(track_id).await.unwrap_or_else(|e| {

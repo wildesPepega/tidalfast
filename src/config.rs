@@ -25,6 +25,8 @@ pub struct Settings {
     pub discord: bool,
     /// Keep the song in Discord while it is paused (without the running clock).
     pub discord_when_paused: bool,
+    /// The texts of the Discord status.
+    pub discord_format: crate::presence::DiscordFormat,
     /// Media keys and the desktop's media controls (MPRIS / Windows SMTC).
     pub media_keys: bool,
     /// Tray icon.
@@ -93,6 +95,7 @@ impl Default for Settings {
             repeat: RepeatMode::Off,
             discord: true,
             discord_when_paused: false,
+            discord_format: Default::default(),
             media_keys: true,
             tray: false,
             link_handler: true,

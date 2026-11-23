@@ -11,6 +11,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 
+use crate::presence::{render, DiscordFormat, Info};
+
 /// Discord application id of tidalfast.
 const APP_ID: &str = "1562542679034961980";
 
@@ -27,15 +29,12 @@ pub enum DiscordCmd {
     Connect,
     Disconnect,
     SetTrack {
-        title: String,
-        artist: String,
-        album: String,
+        info: Info,
         art_url: String,
-        duration: f64,
         url: String,
-        /// The second line: "Single", "EP: Name" or "Album: Name" (empty: none).
-        release: String,
     },
+    /// The texts of the status (templates), and what is shown around them.
+    SetFormat(DiscordFormat),
     SetPlaying {
         playing: bool,
         position: f64,
@@ -53,13 +52,9 @@ pub enum DiscordCmd {
 
 #[derive(Default, Clone, PartialEq)]
 struct Track {
-    title: String,
-    artist: String,
-    album: String,
+    info: Info,
     art_url: String,
     url: String,
-    release: String,
-    duration: i64,
 }
 
 /// What the UI says is happening.
@@ -69,6 +64,7 @@ struct Now {
     playing: bool,
     /// Show the song even while it is paused.
     keep_when_paused: bool,
+    format: DiscordFormat,
     /// Publish nothing for now (the next song's second line is being looked up).
     hold: bool,
     /// Epoch second at which position 0 of the track was (or would be) reached.
@@ -77,13 +73,14 @@ struct Now {
 
 impl Now {
     fn visible(&self) -> bool {
-        (self.playing || self.keep_when_paused) && !self.track.title.is_empty()
+        (self.playing || self.keep_when_paused) && !self.track.info.title.is_empty()
     }
 }
 
 /// What Discord currently shows.
 struct Shown {
     track: Track,
+    format: DiscordFormat,
     start_epoch: i64,
     playing: bool,
     at: Instant,
@@ -188,8 +185,8 @@ impl Worker {
                 self.want = false;
                 self.close();
             }
-            DiscordCmd::SetTrack { title, artist, album, art_url, duration, url, release } => {
-                let track = Track { title, artist, album, art_url, url, release, duration: duration.max(0.0) as i64 };
+            DiscordCmd::SetTrack { info, art_url, url } => {
+                let track = Track { info, art_url, url };
                 if track != self.now.track {
                     self.now.track = track;
                     // a new track starts from the beginning
@@ -204,6 +201,9 @@ impl Worker {
             }
             DiscordCmd::Seek { position } => {
                 self.now.start_epoch = now_epoch() - position.max(0.0) as i64;
+            }
+            DiscordCmd::SetFormat(format) => {
+                self.now.format = format;
             }
             DiscordCmd::KeepWhenPaused(keep) => {
                 self.now.keep_when_paused = keep;
@@ -268,6 +268,7 @@ impl Worker {
             None => true,
             Some(shown) => {
                 shown.track != self.now.track
+                    || shown.format != self.now.format
                     || shown.playing != self.now.playing
                     || (self.now.playing && (shown.start_epoch - self.now.start_epoch).abs() > DRIFT_SECS)
             }
@@ -320,6 +321,7 @@ impl Worker {
         }
         self.shown = Some(Shown {
             track: self.now.track.clone(),
+            format: self.now.format.clone(),
             start_epoch: self.now.start_epoch,
             playing: self.now.playing,
             at: Instant::now(),
@@ -339,35 +341,44 @@ fn fit(text: &str) -> String {
 
 fn build_activity(now: &Now) -> activity::Activity<'static> {
     let t = &now.track;
+    let f = &now.format;
+    let title = &t.info.title;
+    let text = |template: &str, fallback: &str| {
+        let rendered = render(template, &t.info);
+        if rendered.is_empty() { fallback.to_string() } else { rendered }
+    };
     let mut act = activity::Activity::new()
         .activity_type(activity::ActivityType::Listening)
-        .name(if t.artist.is_empty() { fit(&t.title) } else { fit(&format!("{} by {}", t.title, t.artist)) })
+        .name(fit(&text(&f.name, title)))
         .status_display_type(activity::StatusDisplayType::Name)
-        .details(fit(&t.title));
-    // the second line says what kind of release it is
-    if !t.release.is_empty() {
-        act = act.state(fit(&t.release));
+        .details(fit(&text(&f.details, title)));
+    let state = render(&f.state, &t.info);
+    if !state.is_empty() {
+        act = act.state(fit(&state));
     }
 
     // a running clock only while it plays
-    if now.playing && now.start_epoch > 0 {
+    if f.show_time && now.playing && now.start_epoch > 0 {
         let mut timestamps = activity::Timestamps::new().start(now.start_epoch);
-        if t.duration > 0 {
-            timestamps = timestamps.end(now.start_epoch + t.duration);
+        if t.info.duration > 0 {
+            timestamps = timestamps.end(now.start_epoch + t.info.duration);
         }
         act = act.timestamps(timestamps);
     }
 
     if !t.art_url.is_empty() {
         let mut assets = activity::Assets::new().large_image(t.art_url.clone());
-        if !t.album.is_empty() {
-            assets = assets.large_text(fit(&t.album));
+        let hover = render(&f.hover, &t.info);
+        if !hover.is_empty() {
+            assets = assets.large_text(fit(&hover));
         }
         act = act.assets(assets);
     }
 
-    if !t.url.is_empty() {
-        act = act.buttons(vec![activity::Button::new("Listen on TIDAL", t.url.clone())]);
+    if f.show_button && !t.url.is_empty() {
+        // Discord allows 32 characters on a button
+        let label: String = text(&f.button_label, "Listen on TIDAL").chars().take(32).collect();
+        act = act.buttons(vec![activity::Button::new(fit(&label), t.url.clone())]);
     }
     act
 }
@@ -379,17 +390,22 @@ fn now_epoch() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presence::AlbumMeta;
 
     fn now(playing: bool) -> Now {
         Now {
             track: Track {
-                title: "Slow Voltage".into(),
-                artist: "Neon Orchard".into(),
-                album: "Static Bloom".into(),
+                info: Info {
+                    title: "Slow Voltage".into(),
+                    artist: "Neon Orchard".into(),
+                    main_artist: "Neon Orchard".into(),
+                    album: "Static Bloom".into(),
+                    duration: 200,
+                    meta: AlbumMeta { kind: Some("ALBUM".into()), year: "2024".into(), tracks: 9 },
+                    ..Default::default()
+                },
                 art_url: "https://example.invalid/c.jpg".into(),
                 url: "https://tidal.com/browse/track/1".into(),
-                release: "Album: Static Bloom".into(),
-                duration: 200,
             },
             playing,
             start_epoch: 1_000_000,
@@ -402,12 +418,55 @@ mod tests {
     }
 
     #[test]
-    fn the_second_line_is_the_release_and_the_quality_is_gone() {
+    fn the_default_status_is_title_release_and_album() {
         let v = json(&now(true));
         assert_eq!(v["state"], "Album: Static Bloom");
         assert_eq!(v["details"], "Slow Voltage");
-        assert_eq!(v["assets"]["large_text"], "Static Bloom", "the cover's hover text is just the album");
-        assert!(!v.to_string().to_lowercase().contains("lossless"));
+        assert_eq!(v["assets"]["large_text"], "Static Bloom");
+        assert_eq!(v["buttons"][0]["label"], "Listen on TIDAL");
+    }
+
+    #[test]
+    fn your_own_texts_replace_the_defaults() {
+        let mut n = now(true);
+        n.format.details = "{title} · {main_artist}".into();
+        n.format.state = "{year} · {tracks} tracks · {duration}".into();
+        n.format.hover = "{type}".into();
+        n.format.button_label = "Open {title}".into();
+        let v = json(&n);
+        assert_eq!(v["details"], "Slow Voltage · Neon Orchard");
+        assert_eq!(v["state"], "2024 · 9 tracks · 3:20");
+        assert_eq!(v["assets"]["large_text"], "Album");
+        assert_eq!(v["buttons"][0]["label"], "Open Slow Voltage");
+    }
+
+    #[test]
+    fn empty_lines_are_left_out_and_the_name_falls_back_to_the_title() {
+        let mut n = now(true);
+        n.format.state.clear();
+        n.format.hover.clear();
+        n.format.name = String::new();
+        let v = json(&n);
+        assert!(v.get("state").is_none());
+        assert!(v["assets"].get("large_text").is_none());
+        assert_eq!(v["name"], "Slow Voltage");
+    }
+
+    #[test]
+    fn button_and_clock_can_be_switched_off() {
+        let mut n = now(true);
+        n.format.show_button = false;
+        n.format.show_time = false;
+        let v = json(&n);
+        assert!(v.get("buttons").is_none());
+        assert!(v.get("timestamps").is_none());
+    }
+
+    #[test]
+    fn long_button_labels_are_cut_to_what_discord_allows() {
+        let mut n = now(true);
+        n.format.button_label = "x".repeat(60);
+        assert_eq!(json(&n)["buttons"][0]["label"].as_str().unwrap().chars().count(), 32);
     }
 
     #[test]
@@ -422,7 +481,7 @@ mod tests {
         assert!(!n.visible());
         n.keep_when_paused = true;
         assert!(n.visible());
-        n.track.title.clear();
+        n.track.info.title.clear();
         assert!(!n.visible(), "nothing to show");
         assert!(now(true).visible());
     }

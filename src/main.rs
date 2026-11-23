@@ -22,6 +22,7 @@ mod lyrics;
 mod model;
 mod nav;
 mod net;
+mod presence;
 mod overlay;
 mod system;
 mod tidal;

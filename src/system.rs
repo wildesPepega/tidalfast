@@ -54,8 +54,16 @@ impl Notifier {
     fn send(&self, event: SysEvent) {
         // a hidden window does not run the app's loop: bring it back right here
         #[cfg(target_os = "linux")]
-        if matches!(event, SysEvent::Show | SysEvent::ToggleWindow) {
+        if matches!(event, SysEvent::Show | SysEvent::ToggleWindow | SysEvent::Quit) {
             crate::kwin::wake_if_hidden();
+        }
+        if matches!(event, SysEvent::Quit) {
+            // the app closes itself as soon as its loop sees the request; should the loop not run
+            // at all (a window the desktop never draws), do not leave the process hanging
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                std::process::exit(0);
+            });
         }
         let _ = self.tx.send(event);
         self.ctx.request_repaint();

@@ -275,6 +275,8 @@ pub struct App {
     /// Animated covers (the looping videos some albums have).
     animated: crate::animcover::Covers,
     cover_flood_secs: f32,
+    /// The line shown in the empty search field (index into `SEARCH_HINTS`), chosen once per start.
+    search_hint: usize,
     /// When the song last changed (the cover transition runs from then on).
     track_changed: Instant,
     #[cfg(target_os = "linux")]
@@ -441,6 +443,7 @@ impl App {
             cover3d: Default::default(),
             animated: Default::default(),
             cover_flood_secs: 1.4,
+            search_hint: 0,
             track_changed: Instant::now(),
             #[cfg(target_os = "linux")]
             gsr_status: None,
@@ -478,6 +481,10 @@ impl App {
             last_save: Instant::now(),
         };
 
+        // a different hint in the search field at every start
+        app.search_hint = next_search_hint(app.cfg.last_search_hint);
+        app.cfg.last_search_hint = app.search_hint;
+        app.dirty = true;
         if app.cfg.volume > 0.0 {
             app.unmuted_volume = app.cfg.volume;
         }
@@ -1773,7 +1780,7 @@ impl App {
             egui::TextEdit::singleline(&mut self.search_query)
                 .id(search_id)
                 .frame(false)
-                .hint_text(RichText::new("What do you want to listen to?").color(TEXT_DIM))
+                .hint_text(RichText::new(SEARCH_HINTS[self.search_hint]).color(TEXT_DIM))
                 .horizontal_align(egui::Align::Center)
                 .vertical_align(egui::Align::Center)
                 .margin(egui::vec2(0.0, 0.0))
@@ -5349,7 +5356,7 @@ fn media_card(
 #[allow(clippy::too_many_arguments)]
 /// A square (or wide) button tile on the top bar. Dark and nearly opaque, so
 /// the icon stays readable on every wallpaper colour.
-/// A rounded-square glass button of the header.
+/// A rounded-square glass button of the header, in the colours of the theme.
 fn top_tile(
     ui: &egui::Ui,
     tile: egui::Rect,
@@ -5360,23 +5367,24 @@ fn top_tile(
     color: Color32,
     family: egui::FontFamily,
 ) {
-    let fill = if hovered || active {
-        Color32::from_rgba_unmultiplied(44, 46, 64, 235)
-    } else {
-        Color32::from_rgba_unmultiplied(19, 20, 30, 215)
-    };
+    // the dark glass of the panels, with a breath of the accent when hovered or selected
+    let glow = if active { 0.26 } else if hovered { 0.17 } else { 0.08 };
+    let base = ui::panel_solid();
+    let fill = ui::with_alpha(ui::lerp_color(base, accent(), glow), if hovered || active { 238 } else { 220 });
     let painter = ui.painter();
     let radius = egui::CornerRadius::same(14);
     painter.rect_filled(tile, radius, fill);
     let edge = if active {
-        ui::with_alpha(accent(), 150)
+        ui::with_alpha(accent(), 160)
     } else if hovered {
-        ui::with_alpha(accent(), 90)
+        ui::with_alpha(accent(), 100)
     } else {
-        ui::EDGE
+        ui::with_alpha(ui::lerp_color(Color32::WHITE, accent(), 0.5), 56)
     };
     painter.rect_stroke(tile, radius, egui::Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
-    ui::paint_icon(painter, tile.center(), icon, size, color, family);
+    // the icon takes a little of the accent too
+    let ink = if active { color } else { ui::lerp_color(color, accent(), if hovered { 0.5 } else { 0.3 }) };
+    ui::paint_icon(painter, tile.center(), icon, size, ink, family);
 }
 
 /// The home entry at the top of the library: a tile like the covers below it, with its name when open.
@@ -5501,6 +5509,50 @@ fn clock_seed() -> u64 {
 }
 
 /// A pseudo-random number in `0..n` (`0` for `n <= 1`).
+/// Lines for the empty search field.
+const SEARCH_HINTS: &[&str] = &[
+    "What do you want to listen to?",
+    "Search songs, artists, albums…",
+    "Paste a Spotify, YouTube or TIDAL link…",
+    "What's stuck in your head today?",
+    "Find your next favourite song…",
+    "Who are we listening to?",
+    "Type a song, an artist, a mood…",
+    "Looking for a vibe?",
+    "Drop a link and I'll find it on TIDAL…",
+    "Start typing, the music will follow…",
+    "What's the soundtrack for right now?",
+    "That one song you can't remember…",
+    "Search the whole catalogue…",
+    "An artist you've never heard of?",
+    "Playlist for a late night drive?",
+    "Name a song, any song…",
+    "Something loud? Something quiet?",
+    "Search, paste, press Enter…",
+    "Hum it in your head, then type it…",
+    "What was that chorus again?",
+    "Find a song for this moment…",
+    "Turn it up: what's next?",
+    "Your next obsession is one search away…",
+    "Albums, tracks, artists, playlists…",
+    "Fresh ears? Try a new genre…",
+    "Ready when you are…",
+    "Press / to search from anywhere…",
+    "Which era of music today?",
+    "Search for a feeling…",
+    "Let's find something good…",
+];
+
+/// A search hint other than `last` (`usize::MAX`: none yet).
+fn next_search_hint(last: usize) -> usize {
+    let n = SEARCH_HINTS.len();
+    let mut pick = random_below(n);
+    if pick == last {
+        pick = (pick + 1 + random_below(n - 1)) % n;
+    }
+    pick
+}
+
 fn random_below(n: usize) -> usize {
     if n <= 1 {
         return 0;
@@ -5729,6 +5781,20 @@ mod debug_shot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_search_hint_changes_at_every_start() {
+        assert!(SEARCH_HINTS.len() >= 20);
+        let unique: std::collections::HashSet<&&str> = SEARCH_HINTS.iter().collect();
+        assert_eq!(unique.len(), SEARCH_HINTS.len(), "no duplicates");
+        let mut last = usize::MAX;
+        for _ in 0..300 {
+            let next = next_search_hint(last);
+            assert!(next < SEARCH_HINTS.len());
+            assert_ne!(next, last);
+            last = next;
+        }
+    }
 
     #[test]
     fn random_start_stays_in_range_and_varies() {

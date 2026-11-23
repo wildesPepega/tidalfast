@@ -65,6 +65,8 @@ pub struct Settings {
     pub last_track: Option<Track>,
     /// Playlist/album/mix the last track was played from (`None` for single songs).
     pub last_source: Option<String>,
+    /// Which search hint the last start showed (the next start shows another one).
+    pub last_search_hint: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +112,7 @@ impl Default for Settings {
             sidebar_expanded: false,
             last_track: None,
             last_source: None,
+            last_search_hint: usize::MAX,
         }
     }
 }

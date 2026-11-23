@@ -257,6 +257,12 @@ pub struct App {
     loading: Option<u64>,
     /// Tracks in a row that could not be played.
     stream_failures: u32,
+    /// The song of the last session and where it stopped: play continues from there.
+    resume: Option<(u64, f64)>,
+    /// Seek to this as soon as the song has loaded.
+    start_seek: Option<f64>,
+    /// When the playing position was last written to the settings.
+    position_saved: Instant,
     /// Start the song that is being loaded as soon as it is ready (a pause meanwhile clears this).
     autoplay: bool,
     scrub: f64,
@@ -433,6 +439,9 @@ impl App {
             now_quality: String::new(),
             loading: None,
             stream_failures: 0,
+            resume: None,
+            start_seek: None,
+            position_saved: Instant::now(),
             autoplay: true,
             scrub: 0.0,
             scrubbing: false,
@@ -525,8 +534,12 @@ impl App {
             app.playlists_loading = app.playlists.is_empty();
         }
         if let Some(track) = app.cfg.last_track.clone() {
-            // Show the last played track; pressing play starts it from the beginning.
+            // Show the last played track; pressing play continues where the last session stopped.
             app.duration = track.duration as f64;
+            if let Some(at) = resume_position(app.cfg.last_position, track.duration) {
+                app.position = at;
+                app.resume = Some((track.id, at));
+            }
             app.queue = vec![track.clone()];
             app.queue_index = 0;
             // Restore the playlist/album the track came from, positioned at that track.
@@ -808,6 +821,7 @@ impl App {
                     quality,
                     auto,
                     fade,
+                    playing: engine_playing,
                 } => {
                     // a start the user has already skipped past is stale
                     if auto && self.loading.is_some() || !auto && self.loading != Some(track.id) {
@@ -827,6 +841,7 @@ impl App {
                         }
                         self.cfg.last_track = Some((*track).clone());
                         self.cfg.last_source = self.playing_from.clone();
+                        self.cfg.last_position = 0.0;
                         self.dirty = true;
                         self.finished = false;
                         self.discord_track(&track, &quality);
@@ -839,16 +854,29 @@ impl App {
                     self.position = 0.0;
                     self.position_at = Instant::now();
                     self.now_quality = quality;
-                    self.playing = auto || self.autoplay;
+                    // what the engine really does, not what was meant when the load was sent: a
+                    // click on play/pause in between must not leave the button the wrong way round
+                    self.playing = engine_playing;
+                    if !auto && engine_playing != self.autoplay {
+                        self.audio.send(AudioCmd::Toggle);
+                    }
+                    // picking up where the last session stopped
+                    if let Some(at) = self.start_seek.take() {
+                        self.seek(at);
+                    }
                     self.discord.send(DiscordCmd::SetPlaying {
                         playing: self.playing,
-                        position: 0.0,
+                        position: self.position,
                     });
                 }
                 AudioEv::Progress { position, duration } => {
                     if !self.scrubbing && self.loading.is_none() {
                         self.position = position;
                         self.position_at = Instant::now();
+                        // the engine only reports while it plays: the button must say so too
+                        if !self.playing && !self.finished {
+                            self.playing = true;
+                        }
                     }
                     if duration > 0.0 {
                         self.duration = duration;
@@ -856,6 +884,7 @@ impl App {
                 }
                 AudioEv::Paused(paused) => {
                     self.playing = !paused;
+                    self.remember_position();
                     self.discord.send(DiscordCmd::SetPlaying {
                         playing: !paused,
                         position: self.position,
@@ -1072,7 +1101,10 @@ impl App {
         let track = self.queue[self.queue_index].clone();
         self.cfg.last_track = Some(track.clone());
         self.cfg.last_source = self.playing_from.clone();
+        self.cfg.last_position = 0.0;
         self.dirty = true;
+        // the song of the last session starts where that session stopped (once)
+        self.start_seek = self.resume.take().filter(|(id, _)| *id == track.id).map(|(_, at)| at);
         self.current = Some(track.clone());
         self.position = 0.0;
         self.position_at = Instant::now();
@@ -1217,6 +1249,8 @@ impl App {
             None => {
                 self.playing = false;
                 self.finished = true;
+                self.cfg.last_position = 0.0;
+                self.dirty = true;
                 self.audio.send(AudioCmd::Pause);
                 self.discord.send(DiscordCmd::SetPlaying {
                     playing: false,
@@ -1267,6 +1301,8 @@ impl App {
     fn seek(&mut self, pos: f64) {
         self.position = pos;
         self.position_at = Instant::now();
+        self.cfg.last_position = pos;
+        self.dirty = true;
         self.sys_dirty = true;
         self.audio.send(AudioCmd::Seek(pos));
         self.discord.send(DiscordCmd::Seek { position: pos });
@@ -1757,7 +1793,19 @@ impl App {
         self.dirty = true;
     }
 
+    /// Note where in the song we are, so a restart can continue from there.
+    fn remember_position(&mut self) {
+        if self.current.is_some() && !self.finished && self.loading.is_none() && self.duration > 0.0 {
+            self.cfg.last_position = self.position.clamp(0.0, self.duration);
+            self.dirty = true;
+        }
+        self.position_saved = Instant::now();
+    }
+
     fn maybe_save(&mut self) {
+        if self.playing && self.position_saved.elapsed() > Duration::from_secs(8) {
+            self.remember_position();
+        }
         if self.dirty && self.last_save.elapsed() > Duration::from_millis(900) {
             self.cfg.save();
             self.dirty = false;
@@ -3859,7 +3907,7 @@ impl App {
                 ui.heading("Appearance");
                 ui.add_space(8.0);
                 let mut theme = self.cfg.theme_from_cover;
-                if ui.checkbox(&mut theme, "Match the interface to the cover").changed() {
+                if ui::checkbox(ui, &mut theme, "Match the interface to the cover").changed() {
                     self.cfg.theme_from_cover = theme;
                     self.touch();
                 }
@@ -3872,7 +3920,7 @@ impl App {
                 );
                 ui.add_space(14.0);
                 let mut backdrop = self.cfg.cover_backdrop;
-                if ui.checkbox(&mut backdrop, "Cover backdrop").changed() {
+                if ui::checkbox(ui, &mut backdrop, "Cover backdrop").changed() {
                     self.cfg.cover_backdrop = backdrop;
                     self.touch();
                 }
@@ -3883,7 +3931,7 @@ impl App {
 
                 ui.add_space(14.0);
                 let mut animated = self.cfg.animated_covers;
-                if ui.checkbox(&mut animated, "Animated covers").changed() {
+                if ui::checkbox(ui, &mut animated, "Animated covers").changed() {
                     self.cfg.animated_covers = animated;
                     self.touch();
                 }
@@ -3920,7 +3968,7 @@ impl App {
                 ui.heading("Discord");
                 ui.add_space(8.0);
                 let mut discord = self.cfg.discord;
-                if ui.checkbox(&mut discord, "Enable Rich Presence").changed() {
+                if ui::checkbox(ui, &mut discord, "Enable Rich Presence").changed() {
                     self.cfg.discord = discord;
                     if discord {
                         self.discord.send(DiscordCmd::Connect);
@@ -3943,7 +3991,7 @@ impl App {
                 );
                 ui.add_space(10.0);
                 let mut keep = self.cfg.discord_when_paused;
-                if ui.checkbox(&mut keep, "Keep showing it while paused").changed() {
+                if ui::checkbox(ui, &mut keep, "Keep showing it while paused").changed() {
                     self.cfg.discord_when_paused = keep;
                     self.discord.send(DiscordCmd::KeepWhenPaused(keep));
                     self.touch();
@@ -3989,8 +4037,8 @@ impl App {
                     ui.add_space(6.0);
                 }
                 ui.add_space(4.0);
-                ui.checkbox(&mut self.cfg.discord_format.show_button, "Show the button");
-                ui.checkbox(&mut self.cfg.discord_format.show_time, "Show the progress bar and the running clock");
+                ui::checkbox(ui, &mut self.cfg.discord_format.show_button, "Show the button");
+                ui::checkbox(ui, &mut self.cfg.discord_format.show_time, "Show the progress bar and the running clock");
 
                 // the variables
                 ui.add_space(10.0);
@@ -4077,25 +4125,25 @@ impl App {
                 );
                 ui.add_space(10.0);
                 let mut on = self.cfg.overlay;
-                if ui.checkbox(&mut on, "Overlay web page (browser source)").changed() {
+                if ui::checkbox(ui, &mut on, "Overlay web page (browser source)").changed() {
                     self.cfg.overlay = on;
                     self.touch();
                 }
                 let mut api = self.cfg.overlay_api;
-                if ui.checkbox(&mut api, "API (JSON: now playing, next track, cover, progress)").changed() {
+                if ui::checkbox(ui, &mut api, "API (JSON: now playing, next track, cover, progress)").changed() {
                     self.cfg.overlay_api = api;
                     self.touch();
                 }
                 #[cfg(target_os = "linux")]
                 {
                     let mut recording = self.cfg.overlay_recording;
-                    if ui.checkbox(&mut recording, "Show it in GPU Screen Recorder recordings").changed() {
+                    if ui::checkbox(ui, &mut recording, "Show it in GPU Screen Recorder recordings").changed() {
                         self.cfg.overlay_recording = recording;
                         self.touch();
                     }
                 }
                 let mut lan = self.cfg.overlay_lan;
-                if ui.checkbox(&mut lan, "Reachable from other devices (listen on 0.0.0.0)").changed() {
+                if ui::checkbox(ui, &mut lan, "Reachable from other devices (listen on 0.0.0.0)").changed() {
                     self.cfg.overlay_lan = lan;
                     self.touch();
                 }
@@ -4200,7 +4248,7 @@ impl App {
                 ui.add_space(8.0);
 
                 let mut media = self.cfg.media_keys;
-                if ui.checkbox(&mut media, "Media keys and media controls").changed() {
+                if ui::checkbox(ui, &mut media, "Media keys and media controls").changed() {
                     self.cfg.media_keys = media;
                     self.system.set_media(media);
                     self.touch();
@@ -4215,7 +4263,7 @@ impl App {
 
                 ui.add_space(14.0);
                 let mut tray = self.cfg.tray;
-                if ui.checkbox(&mut tray, "Show tray icon").changed() {
+                if ui::checkbox(ui, &mut tray, "Show tray icon").changed() {
                     self.cfg.tray = tray;
                     self.system.set_tray(tray);
                     if !tray && self.window_hidden {
@@ -4249,7 +4297,7 @@ impl App {
 
                 ui.add_space(14.0);
                 let mut handler = self.cfg.link_handler;
-                if ui.checkbox(&mut handler, "Open spotify: and tidal: links in tidalfast").changed() {
+                if ui::checkbox(ui, &mut handler, "Open spotify: and tidal: links in tidalfast").changed() {
                     self.cfg.link_handler = handler;
                     std::thread::spawn(move || crate::desktop::set_link_handler(handler));
                     self.touch();
@@ -4295,7 +4343,7 @@ impl App {
         ui.add_space(6.0);
 
         let mut check = self.cfg.check_updates;
-        if ui.checkbox(&mut check, "Check for updates at startup").changed() {
+        if ui::checkbox(ui, &mut check, "Check for updates at startup").changed() {
             self.cfg.check_updates = check;
             self.touch();
         }
@@ -4497,6 +4545,11 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.remember_position();
+        self.cfg.save();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(debug_assertions)]
         self.debug_shot(ctx);
@@ -5661,6 +5714,12 @@ fn clock_seed() -> u64 {
 }
 
 /// A pseudo-random number in `0..n` (`0` for `n <= 1`).
+/// Where to continue a song from after a restart: not for the first seconds (just start over) and
+/// not for the last ones (it was over).
+fn resume_position(saved: f64, duration: u32) -> Option<f64> {
+    (duration > 0 && saved.is_finite() && saved > 2.0 && saved < duration as f64 - 3.0).then_some(saved)
+}
+
 /// Lines for the empty search field.
 const SEARCH_HINTS: &[&str] = &[
     "What do you want to listen to?",
@@ -5933,6 +5992,16 @@ mod debug_shot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_continues_the_song_unless_it_barely_began_or_was_over() {
+        assert_eq!(resume_position(95.5, 240), Some(95.5));
+        assert_eq!(resume_position(1.0, 240), None, "just start over");
+        assert_eq!(resume_position(0.0, 240), None);
+        assert_eq!(resume_position(238.0, 240), None, "it was over");
+        assert_eq!(resume_position(100.0, 0), None, "no length known");
+        assert_eq!(resume_position(f64::NAN, 240), None);
+    }
 
     #[test]
     fn the_search_hint_changes_at_every_start() {

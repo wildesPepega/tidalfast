@@ -67,6 +67,8 @@ pub struct Settings {
     pub sidebar_expanded: bool,
     /// The track that was playing when the app was last used.
     pub last_track: Option<Track>,
+    /// Where in that track playback was when the app was closed (seconds).
+    pub last_position: f64,
     /// Playlist/album/mix the last track was played from (`None` for single songs).
     pub last_source: Option<String>,
     /// Which search hint the last start showed (the next start shows another one).
@@ -117,6 +119,7 @@ impl Default for Settings {
             recent_searches: Vec::new(),
             sidebar_expanded: false,
             last_track: None,
+            last_position: 0.0,
             last_source: None,
             last_search_hint: usize::MAX,
         }

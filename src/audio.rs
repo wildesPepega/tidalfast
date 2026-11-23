@@ -55,6 +55,8 @@ pub enum AudioEv {
         auto: bool,
         /// Length of the crossfade into this track in seconds (0: a cut).
         fade: f32,
+        /// Whether it is playing (not paused) right now: what the engine really did.
+        playing: bool,
     },
     Progress {
         position: f64,
@@ -264,6 +266,7 @@ impl Engine {
                                             quality: deck.quality.clone(),
                             auto: false,
                             fade: 0.0,
+                            playing: play,
                         });
                         self.cur = Some(deck);
                     }
@@ -325,6 +328,7 @@ impl Engine {
             quality: deck.quality.clone(),
             auto: true,
             fade,
+            playing: true,
         });
         self.cur = Some(deck);
     }

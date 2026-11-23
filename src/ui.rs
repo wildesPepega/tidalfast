@@ -848,6 +848,36 @@ pub fn glass_input(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, wid
     resp
 }
 
+/// A check box in the glass look: a rounded square that fills with the accent when checked.
+/// Returns a response that is `changed()` when it was clicked.
+pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
+    let text_w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(14.5), TEXT).size().x;
+    let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(30.0 + text_w + 6.0, 30.0), Sense::click());
+    if ui.is_enabled() {
+        pointer_on_hover(&resp);
+    }
+    if resp.clicked() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    let hovered = resp.hovered();
+    let boxr = Rect::from_center_size(egui::pos2(rect.left() + 11.0, rect.center().y), egui::vec2(20.0, 20.0));
+    let p = ui.painter();
+    let radius = CornerRadius::same(7);
+    if *value {
+        p.rect_filled(boxr, radius, lerp_color(accent(), Color32::WHITE, if hovered { 0.18 } else { 0.0 }));
+        paint_icon(p, boxr.center(), icons::CHECK, 14.0, BG, bold_family());
+    } else {
+        let base = lerp_color(panel_solid(), Color32::WHITE, if hovered { 0.10 } else { 0.055 });
+        p.rect_filled(boxr, radius, base);
+        let edge = if hovered { with_alpha(accent(), 140) } else { glass_colors(false, false).1 };
+        p.rect_stroke(boxr, radius, Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
+    }
+    let ink = if ui.is_enabled() { TEXT } else { TEXT_DIM };
+    p.text(egui::pos2(boxr.right() + 10.0, rect.center().y), Align2::LEFT_CENTER, label, FontId::proportional(14.5), ink);
+    resp
+}
+
 /// A glass button with an icon and a label, the height of the segmented control.
 pub fn glass_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
     let text_w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(14.0), TEXT).size().x;

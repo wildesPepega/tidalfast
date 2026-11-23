@@ -413,7 +413,7 @@ impl App {
                 ui.add_space(6.0);
 
                 let band: &mut Band = &mut self.cfg.eq.bands[i];
-                if ui.checkbox(&mut band.enabled, "Active").changed() {
+                if crate::ui::checkbox(ui, &mut band.enabled, "Active").changed() {
                     edit.changed = true;
                 }
 

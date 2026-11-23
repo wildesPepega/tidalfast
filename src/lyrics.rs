@@ -100,6 +100,8 @@ pub fn active_line(lines: &[Line], time: f64) -> Option<usize> {
 const FONT_SIZE: f32 = 32.0;
 const ROW_HEIGHT: f32 = 42.0;
 const LINE_GAP: f32 = 26.0;
+/// Space left of the text so the glow round the first word is not cut off.
+const GLOW_ROOM: f32 = 36.0;
 /// Seconds after the last manual scroll before the column follows the song again.
 const MANUAL_HOLD: f64 = 2.8;
 
@@ -178,7 +180,8 @@ impl View {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         let dt = ctx.input(|i| i.stable_dt).min(0.05);
-        let inner = Rect::from_min_max(rect.min + egui::vec2(8.0, 0.0), rect.max - egui::vec2(24.0, 0.0));
+        // room on the left for the glow of the first word of a line
+        let inner = Rect::from_min_max(rect.min + egui::vec2(GLOW_ROOM, 0.0), rect.max - egui::vec2(24.0, 0.0));
         if (inner.width() - self.layout_width).abs() > 0.5 || self.layout.len() != self.lines.len() {
             self.lay_out(ui, inner.width());
         }

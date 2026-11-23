@@ -324,6 +324,8 @@ pub struct App {
     bg_colors: [Color32; 3],
     /// The interface colours currently shown (eased the same way).
     theme: ui::Theme,
+    theme_glide: ui::Glide<ui::Theme>,
+    bg_glide: ui::Glide<[Color32; 3]>,
     /// The last song colours found; kept while the next cover is still loading, so the colours
     /// do not flash to the defaults and back at every song change.
     last_palette: Option<[Color32; 3]>,
@@ -468,6 +470,8 @@ impl App {
             blur_tex: HashMap::new(),
             bg_colors: ui::DEFAULT_PALETTE,
             theme: ui::Theme::default(),
+            theme_glide: ui::Glide::new(ui::Theme::default()),
+            bg_glide: ui::Glide::new(ui::DEFAULT_PALETTE),
             last_palette: None,
             bar_cover: None,
             wall_url: None,
@@ -3351,16 +3355,17 @@ impl App {
         let Some(track) = self.current.clone() else { return };
         let mut close = false;
 
-        // top bar: close on the left, tabs on the right
+        // top bar: close on the left, tabs on the right, in the look of the header buttons
         ui.horizontal(|ui| {
-            if action_button(ui, icons::CARET_DOWN, "Close", false).clicked() {
+            if ui::glass_button(ui, icons::CARET_DOWN, "Close").clicked() {
                 close = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                for (tab, label) in [(NowTab::Credits, "Credits"), (NowTab::Lyrics, "Lyrics")] {
-                    if pill(ui, label, self.now_tab == tab, 30.0 + label.chars().count() as f32 * 8.0).clicked() {
-                        self.now_tab = tab;
-                    }
+                let selected = if self.now_tab == NowTab::Lyrics { 0 } else { 1 };
+                match ui::segmented(ui, egui::Id::new("now_tabs"), &["Lyrics", "Credits"], selected) {
+                    Some(0) => self.now_tab = NowTab::Lyrics,
+                    Some(_) => self.now_tab = NowTab::Credits,
+                    None => {}
                 }
             });
         });
@@ -4384,29 +4389,19 @@ impl eframe::App for App {
             _ => ui::Theme::default(),
         };
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
-        let ease = 1.0 - (-dt * 3.2).exp();
-        let mut moving = false;
-        for (cur, tgt) in self.bg_colors.iter_mut().zip(target) {
-            let next = ui::lerp_color(*cur, tgt, ease);
-            if next == *cur && *cur != tgt {
-                // close enough: snapping avoids stalling on integer rounding
-                *cur = tgt;
-                moving = true;
-            } else if next != *cur {
-                *cur = next;
-                moving = true;
-            }
-        }
-        // the interface colours glide to the new song's the same way
-        let mut next_theme = ui::lerp_theme(self.theme, target_theme, ease);
-        if next_theme == self.theme && self.theme != target_theme {
-            next_theme = target_theme;
-        }
-        if next_theme != self.theme {
-            self.theme = next_theme;
+        // The colours glide to the next song's over as long as its cover transition (the
+        // crossfade, if there is one) and start with the song, not when the cover arrives.
+        let now = ctx.input(|i| i.time);
+        let age = self.track_changed.elapsed().as_secs_f32();
+        let (secs, head) = if age < 2.5 { (self.cover_flood_secs.clamp(1.4, 10.0), age) } else { (1.0, 0.0) };
+        let lerp3 = |a: [Color32; 3], b: [Color32; 3], t: f32| [ui::lerp_color(a[0], b[0], t), ui::lerp_color(a[1], b[1], t), ui::lerp_color(a[2], b[2], t)];
+        self.bg_colors = self.bg_glide.at(now, target, secs, head, lerp3);
+        let theme = self.theme_glide.at(now, target_theme, secs, head, ui::lerp_theme);
+        let moving = !self.bg_glide.done(now) || !self.theme_glide.done(now);
+        if theme != self.theme {
+            self.theme = theme;
             ui::set_theme(self.theme);
             ui::apply_visuals(ctx);
-            moving = true;
         }
         if moving {
             ctx.request_repaint();
@@ -4439,7 +4434,7 @@ impl eframe::App for App {
             self.wall_t = 0.0;
         }
         if self.wall_t < 1.0 {
-            self.wall_t = (self.wall_t + dt / 0.8).min(1.0);
+            self.wall_t = (self.wall_t + dt / self.bg_glide.secs().max(0.8)).min(1.0);
             ctx.request_repaint();
         }
         let tex = |u: &Option<String>| u.as_ref().and_then(|u| self.blur_tex.get(u)).map(|t| t.id());
@@ -5367,20 +5362,10 @@ fn top_tile(
     color: Color32,
     family: egui::FontFamily,
 ) {
-    // the dark glass of the panels, with a breath of the accent when hovered or selected
-    let glow = if active { 0.26 } else if hovered { 0.17 } else { 0.08 };
-    let base = ui::panel_solid();
-    let fill = ui::with_alpha(ui::lerp_color(base, accent(), glow), if hovered || active { 238 } else { 220 });
+    let (fill, edge) = ui::glass_colors(hovered, active);
     let painter = ui.painter();
     let radius = egui::CornerRadius::same(14);
     painter.rect_filled(tile, radius, fill);
-    let edge = if active {
-        ui::with_alpha(accent(), 160)
-    } else if hovered {
-        ui::with_alpha(accent(), 100)
-    } else {
-        ui::with_alpha(ui::lerp_color(Color32::WHITE, accent(), 0.5), 56)
-    };
     painter.rect_stroke(tile, radius, egui::Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
     // the icon takes a little of the accent too
     let ink = if active { color } else { ui::lerp_color(color, accent(), if hovered { 0.5 } else { 0.3 }) };

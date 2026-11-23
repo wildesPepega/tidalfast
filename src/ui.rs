@@ -207,6 +207,46 @@ fn panel_solid_for(tint: Color32) -> Color32 {
     Color32::from_rgb(tint.r() + 3, tint.g() + 3, tint.b() + 4)
 }
 
+/// Eases a value from wherever it is to a new goal over a set time (smoothstep), and starts over
+/// from the current value whenever the goal changes: colours that glide instead of jump.
+pub struct Glide<T> {
+    from: T,
+    goal: T,
+    t0: f64,
+    secs: f32,
+}
+
+impl<T: Copy + PartialEq> Glide<T> {
+    pub fn new(value: T) -> Self {
+        Self { from: value, goal: value, t0: 0.0, secs: 1.0 }
+    }
+
+    fn progress(&self, now: f64) -> f32 {
+        let t = (((now - self.t0) as f32) / self.secs.max(0.01)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// The value at `now`. A new `goal` starts a glide of `secs`, `head_start` seconds
+    /// of which have already passed (the song changed a moment ago).
+    pub fn at(&mut self, now: f64, goal: T, secs: f32, head_start: f32, lerp: impl Fn(T, T, f32) -> T) -> T {
+        if goal != self.goal {
+            self.from = lerp(self.from, self.goal, self.progress(now));
+            self.goal = goal;
+            self.secs = secs.max(0.2);
+            self.t0 = now - (head_start as f64).clamp(0.0, self.secs as f64 * 0.6);
+        }
+        lerp(self.from, self.goal, self.progress(now))
+    }
+
+    pub fn done(&self, now: f64) -> bool {
+        (now - self.t0) as f32 >= self.secs
+    }
+
+    pub fn secs(&self) -> f32 {
+        self.secs
+    }
+}
+
 /// Blend towards `to` (used to ease the theme when the song changes).
 pub fn lerp_theme(from: Theme, to: Theme, t: f32) -> Theme {
     Theme {
@@ -727,7 +767,7 @@ pub fn action_button(ui: &mut Ui, icon: &str, label: &str, primary: bool) -> Res
     let (fill, ink) = match (enabled, primary, resp.hovered()) {
         (false, _, _) => (CARD, TEXT_DIM),
         (true, true, false) => (accent(), BG),
-        (true, true, true) => (Color32::from_rgb(190, 238, 185), BG),
+        (true, true, true) => (lerp_color(accent(), Color32::WHITE, 0.25), BG),
         (true, false, false) => (CARD, TEXT),
         (true, false, true) => (CARD_HOVER, TEXT),
     };
@@ -744,6 +784,93 @@ pub fn action_button(ui: &mut Ui, icon: &str, label: &str, primary: bool) -> Res
     }
     p.galley(egui::pos2(x, rect.center().y - galley.size().y * 0.5), galley, ink);
     resp
+}
+
+/// Fill and edge of the glass controls (header buttons, tabs): the panel glass with a breath of
+/// the accent, more when hovered or selected.
+pub fn glass_colors(hovered: bool, active: bool) -> (Color32, Color32) {
+    let glow = if active { 0.26 } else if hovered { 0.17 } else { 0.08 };
+    let fill = with_alpha(lerp_color(panel_solid(), accent(), glow), if hovered || active { 238 } else { 220 });
+    let edge = if active {
+        with_alpha(accent(), 160)
+    } else if hovered {
+        with_alpha(accent(), 100)
+    } else {
+        with_alpha(lerp_color(Color32::WHITE, accent(), 0.5), 56)
+    };
+    (fill, edge)
+}
+
+/// A glass button with an icon and a label, the height of the segmented control.
+pub fn glass_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
+    let text_w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(14.0), TEXT).size().x;
+    let icon_w = if icon.is_empty() { 0.0 } else { 26.0 };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(text_w + icon_w + 34.0, 38.0), Sense::click());
+    pointer_on_hover(&resp);
+    let (fill, edge) = glass_colors(resp.hovered(), false);
+    let p = ui.painter();
+    let radius = CornerRadius::same(13);
+    p.rect_filled(rect, radius, fill);
+    p.rect_stroke(rect, radius, Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
+    let ink = lerp_color(TEXT, accent(), if resp.hovered() { 0.5 } else { 0.3 });
+    let mut x = rect.left() + 17.0;
+    if !icon.is_empty() {
+        paint_icon(p, egui::pos2(x + 8.0, rect.center().y), icon, 17.0, ink, FontFamily::Proportional);
+        x += icon_w;
+    }
+    p.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, label, FontId::proportional(14.0), ink);
+    resp
+}
+
+/// Tabs in one glass capsule; the highlight slides to the chosen one. Returns the index clicked.
+pub fn segmented(ui: &mut Ui, id: egui::Id, labels: &[&str], selected: usize) -> Option<usize> {
+    let font = FontId::proportional(14.0);
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|l| ui.painter().layout_no_wrap((*l).to_string(), font.clone(), TEXT).size().x + 34.0)
+        .collect();
+    let total: f32 = widths.iter().sum::<f32>() + 6.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total, 38.0), Sense::hover());
+    let (fill, edge) = glass_colors(false, false);
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(13), fill);
+    p.rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
+
+    // where each segment is, and the highlight gliding to the chosen one
+    let mut x = rect.left() + 3.0;
+    let slots: Vec<Rect> = widths
+        .iter()
+        .map(|w| {
+            let r = Rect::from_min_size(egui::pos2(x, rect.top() + 3.0), egui::vec2(*w, 32.0));
+            x += w;
+            r
+        })
+        .collect();
+    let target = slots.get(selected).copied().unwrap_or(rect);
+    let glide_x = ui.ctx().animate_value_with_time(id.with("x"), target.left(), 0.18);
+    let glide_w = ui.ctx().animate_value_with_time(id.with("w"), target.width(), 0.18);
+    let mark = Rect::from_min_size(egui::pos2(glide_x, target.top()), egui::vec2(glide_w, target.height()));
+    let p = ui.painter();
+    p.rect_filled(mark, CornerRadius::same(10), with_alpha(lerp_color(panel_solid(), accent(), 0.34), 255));
+    p.rect_stroke(mark, CornerRadius::same(10), Stroke::new(1.0_f32, with_alpha(accent(), 150)), egui::StrokeKind::Inside);
+
+    let mut clicked = None;
+    for (i, (slot, label)) in slots.iter().zip(labels).enumerate() {
+        let resp = ui.interact(*slot, id.with(i), Sense::click());
+        pointer_on_hover(&resp);
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+        let ink = if i == selected {
+            accent()
+        } else if resp.hovered() {
+            TEXT
+        } else {
+            TEXT_DIM
+        };
+        ui.painter().text(slot.center(), Align2::CENTER_CENTER, *label, font.clone(), ink);
+    }
+    clicked
 }
 
 /// A compact toggle pill with a text label.
@@ -945,5 +1072,29 @@ mod theme_tests {
         assert_eq!(lerp_theme(a, b, 1.0), b);
         let mid = lerp_theme(a, b, 0.5);
         assert!(mid != a && mid != b);
+    }
+
+    #[test]
+    fn a_glide_starts_from_where_it_is_and_takes_its_time() {
+        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+        let mut g = Glide::new(0.0_f32);
+        assert_eq!(g.at(10.0, 0.0, 2.0, 0.0, lerp), 0.0);
+        // a new goal: nothing happens at once, then it moves smoothly, and it ends on the goal
+        assert_eq!(g.at(10.0, 1.0, 2.0, 0.0, lerp), 0.0);
+        let mid = g.at(11.0, 1.0, 2.0, 0.0, lerp);
+        assert!((mid - 0.5).abs() < 1e-5, "{mid}");
+        assert!(!g.done(11.0));
+        assert_eq!(g.at(12.5, 1.0, 2.0, 0.0, lerp), 1.0);
+        assert!(g.done(12.5));
+        // a goal that changes midway starts from the value reached so far, not from the old start
+        let mut g = Glide::new(0.0_f32);
+        g.at(0.0, 1.0, 2.0, 0.0, lerp);
+        let reached = g.at(1.0, 1.0, 2.0, 0.0, lerp);
+        let after = g.at(1.0, 0.0, 2.0, 0.0, lerp);
+        assert!((after - reached).abs() < 1e-5, "no jump: {reached} -> {after}");
+        // a head start shortens the wait (the song changed before the colours were known)
+        let mut g = Glide::new(0.0_f32);
+        g.at(5.0, 1.0, 4.0, 2.0, lerp);
+        assert!((g.at(5.0, 1.0, 4.0, 2.0, lerp) - 0.5).abs() < 1e-5);
     }
 }

@@ -41,9 +41,48 @@ fn syllables(word: &str) -> usize {
     count.max(1)
 }
 
+/// Seconds per syllable when nothing better is known.
+const DEFAULT_PACE: f64 = 0.23;
+
+/// How fast each line is sung, in seconds per syllable. Lines that follow each other closely tell
+/// the pace (a rapped verse is quick, a ballad slow); lines with a long gap after them cannot,
+/// so they take the pace of their neighbours. This follows the singer's speed changes through the song.
+fn paces(synced: &[(f64, String)], duration: f64) -> Vec<f64> {
+    let n = synced.len();
+    let measured: Vec<Option<f64>> = (0..n)
+        .map(|i| {
+            let syll: usize = synced[i].1.split_whitespace().map(syllables).sum();
+            let next = synced.get(i + 1).map(|(t, _)| *t).unwrap_or(duration);
+            let gap = next - synced[i].0;
+            // a line that is clearly sung into the gap (no long pause): the gap, less a breath, is its length
+            (syll >= 3 && gap > 0.4 && gap < 5.5).then(|| ((gap - 0.35) / syll as f64).clamp(0.10, 0.45))
+        })
+        .collect();
+    let median = |mut v: Vec<f64>| -> Option<f64> {
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_by(|a, b| a.total_cmp(b));
+        Some(v[v.len() / 2])
+    };
+    let song = median(measured.iter().flatten().copied().collect()).unwrap_or(DEFAULT_PACE);
+    (0..n)
+        .map(|i| {
+            let from = i.saturating_sub(4);
+            let to = (i + 5).min(n);
+            let near: Vec<f64> = measured[from..to].iter().flatten().copied().collect();
+            // the neighbours' pace, drawn a little towards the whole song's
+            match median(near) {
+                Some(local) => 0.7 * local + 0.3 * song,
+                None => song,
+            }
+        })
+        .collect()
+}
+
 /// How long a line is actually sung, given the time until the next one.
-fn sung_seconds(total_syllables: usize, gap: f64) -> f64 {
-    let estimate = total_syllables as f64 * 0.23 + 0.5;
+fn sung_seconds(total_syllables: usize, gap: f64, pace: f64) -> f64 {
+    let estimate = total_syllables as f64 * pace + 0.5;
     let gap = (gap - 0.08).max(0.2);
     if gap <= estimate * 1.5 {
         // no room for a pause: the line fills the time
@@ -57,6 +96,7 @@ fn sung_seconds(total_syllables: usize, gap: f64) -> f64 {
 /// Turn the timed lines of an LRC file into lines with timed words.
 pub fn build(synced: &[(f64, String)], duration: f64) -> Vec<Line> {
     let mut lines = Vec::with_capacity(synced.len());
+    let pace = paces(synced, duration);
     for (i, (start, text)) in synced.iter().enumerate() {
         let next = synced.get(i + 1).map(|(t, _)| *t).unwrap_or_else(|| (*start + 6.0).max(duration));
         let end = next.max(*start + 0.1);
@@ -77,7 +117,7 @@ pub fn build(synced: &[(f64, String)], duration: f64) -> Vec<Line> {
                 })
                 .collect();
             let total: f64 = weights.iter().sum();
-            let span = sung_seconds(words.iter().map(|w| syllables(w)).sum(), end - start);
+            let span = sung_seconds(words.iter().map(|w| syllables(w)).sum(), end - start, pace[i]);
             let mut at = *start;
             for (w, weight) in words.iter().zip(&weights) {
                 let len = span * weight / total;
@@ -350,6 +390,23 @@ mod tests {
         let dur = |i: usize| w[i].end - w[i].start;
         assert!(dur(1) > dur(0), "{} vs {}", dur(1), dur(0));
         assert!(dur(2) > dur(0), "the last word is held: {} vs {}", dur(2), dur(0));
+    }
+
+    #[test]
+    fn a_line_before_a_long_pause_is_sung_at_the_pace_of_the_song() {
+        let text = "one two three four five six seven eight";
+        let mut fast: Vec<(f64, String)> = (0..8).map(|i| (10.0 + i as f64 * 1.6, text.to_string())).collect();
+        let mut slow: Vec<(f64, String)> = (0..8).map(|i| (10.0 + i as f64 * 4.0, text.to_string())).collect();
+        for song in [&mut fast, &mut slow] {
+            let last = song.last().unwrap().0;
+            song.push((last + 12.0, "end".into()));
+        }
+        let sung = |song: &[(f64, String)]| {
+            let l = build(song, 300.0);
+            let line = &l[song.len() - 2];
+            line.words.last().unwrap().end - line.start
+        };
+        assert!(sung(&fast) < sung(&slow), "fast {} vs slow {}", sung(&fast), sung(&slow));
     }
 
     #[test]

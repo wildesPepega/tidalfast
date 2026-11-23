@@ -3490,7 +3490,11 @@ impl App {
 
         // top bar: close on the left, tabs on the right, in the look of the header buttons
         ui.horizontal(|ui| {
-            if ui::glass_button(ui, icons::CARET_DOWN, "Close").clicked() {
+            // an icon-only tile in the look of the home and settings buttons
+            let (tile, resp) = ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
+            pointer_on_hover(&resp);
+            top_tile(ui, tile, resp.hovered(), false, icons::ARROWS_IN_SIMPLE, 18.0, ui::TEXT, egui::FontFamily::Proportional);
+            if resp.on_hover_text("Minimize (Esc)").clicked() {
                 close = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

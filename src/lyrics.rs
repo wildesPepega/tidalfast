@@ -63,11 +63,17 @@ pub fn build(synced: &[(f64, String)], duration: f64) -> Vec<Line> {
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut timed = Vec::with_capacity(words.len());
         if !words.is_empty() {
+            let last = words.len() - 1;
             let weights: Vec<f64> = words
                 .iter()
-                .map(|w| {
-                    let pause = if w.ends_with([',', ';', ':']) { 0.5 } else if w.ends_with(['.', '!', '?', '…']) { 0.9 } else { 0.0 };
-                    syllables(w) as f64 + pause
+                .enumerate()
+                .map(|(i, w)| {
+                    let pause = if w.ends_with([',', ';', ':']) { 0.45 } else if w.ends_with(['.', '!', '?', '…']) { 0.8 } else { 0.0 };
+                    // a word takes longer the more syllables and letters (consonants take time too);
+                    // the last word of a line is usually held
+                    let letters = w.chars().filter(|c| c.is_alphanumeric()).count() as f64;
+                    let body = 0.62 * syllables(w) as f64 + 0.05 * letters;
+                    body * if i == last { 1.25 } else { 1.0 } + pause
                 })
                 .collect();
             let total: f64 = weights.iter().sum();
@@ -183,6 +189,7 @@ impl View {
 
         // where the column wants to be: the sung line a bit above the middle
         let active = active_line(&self.lines, time + 0.25);
+        let sung_now = active_line(&self.lines, time);
         let focus_y = rect.height() * 0.40;
         let target = match active {
             Some(i) => self.layout[i].top + self.layout[i].height * 0.5 - focus_y,
@@ -224,7 +231,9 @@ impl View {
             let dist = ((y0 + lay.height * 0.5 - rect.top() - view_mid).abs() / rect.height()).clamp(0.0, 1.0);
             let falloff = 1.0 - smoothstep(0.0, 0.62, dist);
             let edge = smoothstep(rect.top(), rect.top() + 70.0, y0 + lay.height * 0.5).min(1.0 - smoothstep(rect.bottom() - 90.0, rect.bottom(), y0 + lay.height * 0.5));
-            let is_active = active == Some(i);
+            // the scroll leads a little, but the highlighting follows the singing exactly, so the
+            // last words of a line are not greyed out before they are sung
+            let is_active = sung_now == Some(i);
             let line_rect = Rect::from_min_size(Pos2::new(inner.left(), y0), egui::vec2(inner.width(), lay.height));
             let hovered = pointer.is_some_and(|p| line_rect.expand2(egui::vec2(8.0, LINE_GAP * 0.5)).contains(p));
             let resp = ui.interact(line_rect.expand2(egui::vec2(8.0, LINE_GAP * 0.5)), egui::Id::new(("lyric", i)), egui::Sense::click());
@@ -329,6 +338,15 @@ mod tests {
         }
         assert!(l.words.last().unwrap().end < 14.0, "stays inside the line");
         assert!(lines[1].words.is_empty(), "an empty line is a break");
+    }
+
+    #[test]
+    fn longer_words_take_longer_and_the_last_one_is_held() {
+        let lines = build(&[(10.0, "to strengths to".into()), (20.0, "x".into())], 100.0);
+        let w = &lines[0].words;
+        let dur = |i: usize| w[i].end - w[i].start;
+        assert!(dur(1) > dur(0), "{} vs {}", dur(1), dur(0));
+        assert!(dur(2) > dur(0), "the last word is held: {} vs {}", dur(2), dur(0));
     }
 
     #[test]

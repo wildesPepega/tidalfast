@@ -422,15 +422,7 @@ pub fn blur_thumb(rgba: &[u8], width: usize, height: usize) -> egui::ColorImage 
 pub struct WallFx {
     /// Drifting colour fields instead of the blurred cover.
     pub fluid: bool,
-    /// 0‥1 bass level (0 when the backdrop should not react).
-    pub bass: f32,
-    /// The five bands, 0‥1 each.
-    pub bands: [f32; 5],
-    /// Drifts faster with the energy of the music.
     pub time: f32,
-    /// Seconds since the last beat (large when there is none), and how hard it was.
-    pub beat_age: f32,
-    pub beat: f32,
 }
 
 /// A soft round glow: opaque in the middle, nothing at the edge.
@@ -468,7 +460,7 @@ pub fn soft_ellipse(painter: &egui::Painter, center: egui::Pos2, radii: egui::Ve
     painter.add(egui::Shape::mesh(mesh));
 }
 
-/// Big colour fields in the song's colours that drift, swell with the music and ring on a beat.
+/// Big colour fields in the song's colours that drift slowly.
 fn paint_fluid(painter: &egui::Painter, rect: Rect, colors: &[Color32; 3], fx: WallFx) {
     let fields = [
         colors[0],
@@ -480,28 +472,12 @@ fn paint_fluid(painter: &egui::Painter, rect: Rect, colors: &[Color32; 3], fx: W
     let size = rect.width().max(rect.height());
     for (i, color) in fields.iter().enumerate() {
         let k = i as f32;
-        let band = fx.bands[i % 5];
         let x = 0.5 + 0.42 * (fx.time * (0.07 + 0.021 * k) + k * 2.1).sin();
         let y = 0.5 + 0.40 * (fx.time * (0.06 + 0.017 * k) + k * 1.3).cos();
         let center = egui::pos2(rect.left() + rect.width() * x, rect.top() + rect.height() * y);
-        let radius = size * (0.46 + 0.04 * (fx.time * 0.15 + k).sin()) * (1.0 + 0.34 * band + 0.10 * fx.bass);
-        soft_orb(painter, center, radius, with_alpha(*color, (115.0 + 110.0 * band).min(255.0) as u8));
+        let radius = size * (0.46 + 0.04 * (fx.time * 0.15 + k).sin()) * 1.0;
+        soft_orb(painter, center, radius, with_alpha(*color, 120));
     }
-}
-
-/// A ring that runs out from the middle of the window on a beat.
-fn paint_beat(painter: &egui::Painter, rect: Rect, color: Color32, fx: WallFx) {
-    if fx.beat <= 0.0 || fx.beat_age > 1.4 {
-        return;
-    }
-    let p = (fx.beat_age / 1.4).clamp(0.0, 1.0);
-    let ease = 1.0 - (1.0 - p).powi(3);
-    let radius = rect.width().max(rect.height()) * (0.08 + 0.75 * ease);
-    let alpha = (1.0 - p).powf(1.4) * fx.beat;
-    let center = rect.center();
-    // a thick, soft ring: two glows, the inner one cut out by drawing the stroke on top
-    soft_orb(painter, center, radius * 1.18, with_alpha(color, (60.0 * alpha) as u8));
-    painter.circle_stroke(center, radius, egui::Stroke::new(2.0 + 6.0 * (1.0 - p), with_alpha(color, (130.0 * alpha) as u8)));
 }
 
 pub fn paint_song_wallpaper(
@@ -539,11 +515,8 @@ pub fn paint_song_wallpaper(
         (None, _) => paint_palette_glow(&painter, rect, colors),
     }
 
-    if fx.beat > 0.0 {
-        paint_beat(&painter, rect, colors[0], fx);
-    }
     // dim evenly, a little more towards the edges and the bottom
-    painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(9, 10, 16, (105.0 - 46.0 * fx.bass) as u8));
+    painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(9, 10, 16, 105));
     let mut shade = egui::Mesh::default();
     let mid = rect.top() + rect.height() * 0.45;
     shade.colored_vertex(egui::pos2(rect.left(), mid), Color32::TRANSPARENT);

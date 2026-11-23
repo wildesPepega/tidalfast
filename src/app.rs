@@ -323,15 +323,6 @@ pub struct App {
     credits: Option<Vec<CreditGroup>>,
     lyrics_view: crate::lyrics::View,
     viz: [f32; VIZ_BARS],
-    /// Smoothed bass level 0‥1 (for the backdrop that breathes).
-    bass: f32,
-    /// The five bands, smoothed.
-    bands: [f32; 5],
-    /// The backdrop's own clock: runs faster with the energy of the music.
-    wall_phase: f32,
-    /// When the last beat was, and how hard.
-    beat_at: f64,
-    beat: f32,
     viz_ref: f32,
     avatar_rect: egui::Rect,
     settings_tab: SettingsTab,
@@ -479,11 +470,6 @@ impl App {
             credits: None,
             lyrics_view: Default::default(),
             viz: [0.0; VIZ_BARS],
-            bass: 0.0,
-            bands: [0.0; 5],
-            wall_phase: 0.0,
-            beat_at: -100.0,
-            beat: 0.0,
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
@@ -3543,7 +3529,6 @@ impl App {
         let textures = &self.textures;
         self.cover3d.reflection = self.cfg.cover_reflection;
         self.cover3d.holo = self.cfg.cover_holo;
-        self.cover3d.pulse = self.bass;
         self.cover3d.show(
             ui,
             cover_rect,
@@ -3554,7 +3539,6 @@ impl App {
             self.cover_flood_secs,
             self.cfg.cover_effect,
             |ui, rect| {
-                ui.painter().rect_filled(rect.translate(egui::vec2(0.0, 10.0)).expand(2.0), 16.0, Color32::from_black_alpha(90));
                 paint_cover_r(ui, textures, url.as_deref(), rect, 14.0);
             },
         );
@@ -3649,7 +3633,7 @@ impl App {
         } else {
             0.0
         };
-        self.position + ahead - 0.06
+        self.position + ahead - 0.06 + self.cfg.lyric_offset_ms as f64 / 1000.0
     }
 
     /// Songwriters, performers and crew; returns a clicked person who has an artist page.
@@ -3978,11 +3962,6 @@ impl App {
                     self.cfg.fluid_backdrop = v;
                     self.touch();
                 }
-                let mut v = self.cfg.audio_reactive;
-                if toggle_row(ui, &mut v, "Audio reactive", "The backdrop breathes with the bass of the music.") {
-                    self.cfg.audio_reactive = v;
-                    self.touch();
-                }
 
                 settings_group(ui, "Cover");
                 let mut v = self.cfg.animated_covers;
@@ -4025,6 +4004,26 @@ impl App {
                     self.cfg.lyric_depth = v;
                     self.touch();
                 }
+                ui.add_space(4.0);
+                ui.label(RichText::new("Timing").size(14.0));
+                ui.label(
+                    RichText::new("Shifts the lyrics against the music. Lyrics too early? Move to the right (+). Too late? Move to the left (−). Bluetooth speakers usually need +.")
+                        .size(12.5)
+                        .color(TEXT_DIM),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let mut ms = self.cfg.lyric_offset_ms;
+                    ui.spacing_mut().slider_width = 260.0;
+                    if ui.add(egui::Slider::new(&mut ms, -1000..=1000).suffix(" ms").step_by(10.0)).changed() {
+                        self.cfg.lyric_offset_ms = ms;
+                        self.touch();
+                    }
+                    if ui::glass_button(ui, "", "Reset").clicked() && self.cfg.lyric_offset_ms != 0 {
+                        self.cfg.lyric_offset_ms = 0;
+                        self.touch();
+                    }
+                });
             }
             SettingsTab::Discord => {
                 ui.heading("Discord");
@@ -4778,30 +4777,8 @@ impl eframe::App for App {
         if self.shot.play {
             self.viz = [0.9, 0.55, 0.75, 0.4, 0.6];
         }
-        {
-            // the music, band by band: quick to rise, slow to fall
-            let dt = ctx.input(|i| i.stable_dt).min(0.1);
-            let now = ctx.input(|i| i.time);
-            let reactive = self.cfg.audio_reactive && self.playing;
-            let before = self.bass;
-            for i in 0..5 {
-                let target = if reactive { self.viz[i].clamp(0.0, 1.0) } else { 0.0 };
-                let rate = if target > self.bands[i] { 20.0 } else { 4.0 };
-                self.bands[i] += (target - self.bands[i]) * (1.0 - (-dt * rate).exp());
-                if self.bands[i] < 0.002 && target == 0.0 {
-                    self.bands[i] = 0.0;
-                }
-            }
-            self.bass = self.bands[0];
-            // a beat: the bass jumps up
-            let hit = if reactive { self.viz[0].clamp(0.0, 1.0) } else { 0.0 };
-            if reactive && hit - before > 0.20 && now - self.beat_at > 0.30 {
-                self.beat_at = now;
-                self.beat = hit.clamp(0.5, 1.0);
-            }
-            let energy = self.bands.iter().sum::<f32>() / 5.0;
-            self.wall_phase += dt * (1.0 + 3.0 * energy);
-        }
+        self.shortcuts(ctx);
+
         // wallpaper: blurred cover + the palette of the current song
         let cover_url = self.current.as_ref().and_then(|t| t.cover_url(COVER_NOW));
         let mut palette = cover_url.as_ref().and_then(|u| self.palettes.get(u)).copied();
@@ -4875,16 +4852,9 @@ impl eframe::App for App {
             if backdrop { tex(&self.wall_url) } else { None },
             if backdrop { tex(&self.wall_prev) } else { None },
             self.wall_t,
-            ui::WallFx {
-                fluid: self.cfg.fluid_backdrop,
-                bass: self.bass,
-                bands: self.bands,
-                time: self.wall_phase,
-                beat_age: (now - self.beat_at) as f32,
-                beat: self.beat,
-            },
+            ui::WallFx { fluid: self.cfg.fluid_backdrop, time: now as f32 },
         );
-        if self.cfg.fluid_backdrop || self.bass > 0.0 || (now - self.beat_at) < 1.5 {
+        if self.cfg.fluid_backdrop {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
 
@@ -6208,9 +6178,6 @@ mod debug_shot {
             }
             if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
                 self.cfg.fluid_backdrop = true;
-            }
-            if std::env::var_os("TIDALFAST_SHOT_REACTIVE").is_some() {
-                self.cfg.audio_reactive = true;
             }
             if let Some((x, y)) = self.shot.mouse {
                 self.cover3d.debug_pointer = Some(egui::vec2(x, y));

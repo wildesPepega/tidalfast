@@ -241,13 +241,11 @@ pub struct Cover3d {
     pub reflection: bool,
     /// A rainbow foil sheen that follows the mouse.
     pub holo: bool,
-    /// 0‥1: the cover swells a little with the bass.
-    pub pulse: f32,
 }
 
 impl Default for Cover3d {
     fn default() -> Self {
-        Self { gpu: Arc::new(Mutex::new(GpuState::Idle)), anim: Anim::default(), tilt: egui::Vec2::ZERO, hover: 0.0, light: egui::vec2(0.3, 0.25), #[cfg(debug_assertions)] debug_pointer: None, reflection: false, holo: false, pulse: 0.0 }
+        Self { gpu: Arc::new(Mutex::new(GpuState::Idle)), anim: Anim::default(), tilt: egui::Vec2::ZERO, hover: 0.0, light: egui::vec2(0.3, 0.25), #[cfg(debug_assertions)] debug_pointer: None, reflection: false, holo: false }
     }
 }
 
@@ -312,7 +310,7 @@ impl Cover3d {
             ctx.request_repaint();
         }
 
-        // a soft shadow while the cover rests; it fades out as soon as the mouse moves the plate
+        // how far the plate is turned over (the flip effect), and how much of it is left together (the explosion)
         let flip = if self.anim.effect == 4 && progress < 1.0 {
             let e = progress * progress * (3.0 - 2.0 * progress);
             e * std::f32::consts::PI
@@ -326,32 +324,17 @@ impl Cover3d {
         } else {
             1.0
         };
-        // (at the very edge the mouse is just outside the cover, but the plate already tilts fully:
-        // the tilt counts too, not only the hover)
-        let engaged = self.hover.max(self.tilt.length().min(1.0));
-        let rest = (1.0 - engaged * 1.6).clamp(0.0, 1.0) * flip.cos().abs() * blown;
-        if rest > 0.01 {
-            ui.painter().add(
-                egui::epaint::Shadow {
-                    offset: [0, 16],
-                    blur: 46,
-                    spread: 0,
-                    color: egui::Color32::from_black_alpha((150.0 * rest) as u8),
-                }
-                .as_shape(rect.shrink(rect.width() * 0.02), 20.0),
-            );
-        }
 
         // light spilling onto the floor under the cover, in the colour of the theme
         if self.reflection {
             let lit = (0.55 + 0.45 * self.hover) * blown * flip.cos().abs();
             if lit > 0.02 {
                 let a = crate::ui::accent();
-                let glow = egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), (70.0 * lit + 50.0 * self.pulse) as u8);
+                let glow = egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), (78.0 * lit) as u8);
                 crate::ui::soft_ellipse(
                     &ui.painter().with_clip_rect(ui.clip_rect()),
                     egui::pos2(rect.center().x, rect.bottom() + rect.height() * 0.07),
-                    egui::vec2(rect.width() * (0.62 + 0.08 * self.pulse), rect.height() * 0.22),
+                    egui::vec2(rect.width() * 0.62, rect.height() * 0.22),
                     glow,
                 );
             }
@@ -380,7 +363,7 @@ impl Cover3d {
         let params = Params {
             size_px: rect.width() * ppp,
             rot: [self.tilt.y * MAX_TILT, self.tilt.x * MAX_TILT],
-            zoom: 1.0 + 0.025 * self.hover + 0.04 * self.pulse,
+            zoom: 1.0 + 0.025 * self.hover,
             light: [self.light.x, self.light.y],
             glare: 0.18 * self.hover,
             progress,

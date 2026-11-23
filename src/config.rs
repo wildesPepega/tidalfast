@@ -45,8 +45,8 @@ pub struct Settings {
     pub cover_holo: bool,
     /// Drifting colour fields from the cover instead of the blurred cover as backdrop.
     pub fluid_backdrop: bool,
-    /// The backdrop breathes with the bass.
-    pub audio_reactive: bool,
+    /// Shifts the lyrics against the music (milliseconds, + = later), for latency of speakers or Bluetooth.
+    pub lyric_offset_ms: i32,
     /// The sung word glows.
     pub lyric_glow: bool,
     /// Lines far from the sung one are softly blurred.
@@ -122,7 +122,7 @@ impl Default for Settings {
             cover_reflection: true,
             cover_holo: true,
             fluid_backdrop: false,
-            audio_reactive: false,
+            lyric_offset_ms: 0,
             lyric_glow: true,
             lyric_depth: true,
             cover_effect: Default::default(),

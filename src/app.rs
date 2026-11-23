@@ -698,6 +698,7 @@ impl App {
                             track: Box::new(track.clone()),
                             play: self.autoplay,
                             quality: quality.clone(),
+                            start_at: self.start_seek.unwrap_or(0.0),
                         });
                     }
                 }
@@ -826,6 +827,7 @@ impl App {
                     auto,
                     fade,
                     playing: engine_playing,
+                    start,
                 } => {
                     // a start the user has already skipped past is stale
                     if auto && self.loading.is_some() || !auto && self.loading != Some(track.id) {
@@ -864,9 +866,12 @@ impl App {
                     if !auto && engine_playing != self.autoplay {
                         self.audio.send(AudioCmd::Toggle);
                     }
-                    // picking up where the last session stopped
-                    if let Some(at) = self.start_seek.take() {
-                        self.seek(at);
+                    // picking up where the last session stopped: the engine began there already
+                    self.start_seek = None;
+                    if start > 0.0 {
+                        self.position = start;
+                        self.position_at = Instant::now();
+                        self.cfg.last_position = start;
                     }
                     self.discord.send(DiscordCmd::SetPlaying {
                         playing: self.playing,
@@ -1131,7 +1136,11 @@ impl App {
         self.audio.send(AudioCmd::Halt);
         if audiocache::enabled() && audiocache::global().is_some_and(|c| c.has(track.id)) {
             // played before: straight from the disk
-            self.audio.send(AudioCmd::LoadCached { track: Box::new(track.clone()), play: true });
+            self.audio.send(AudioCmd::LoadCached {
+                track: Box::new(track.clone()),
+                play: true,
+                start_at: self.start_seek.unwrap_or(0.0),
+            });
         } else {
             self.net.send(Cmd::ResolveTrack {
                 track_id: track.id,

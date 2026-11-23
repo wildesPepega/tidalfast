@@ -26,6 +26,8 @@ pub enum AudioCmd {
         track: Box<Track>,
         play: bool,
         quality: String,
+        /// Begin this many seconds into the song (0: at the start).
+        start_at: f64,
     },
     /// Get the next track ready; the engine switches to it on its own.
     Preload {
@@ -37,6 +39,7 @@ pub enum AudioCmd {
     LoadCached {
         track: Box<Track>,
         play: bool,
+        start_at: f64,
     },
     PreloadCached {
         track: Box<Track>,
@@ -65,6 +68,8 @@ pub enum AudioEv {
         fade: f32,
         /// Whether it is playing (not paused) right now: what the engine really did.
         playing: bool,
+        /// Where in the song it began (0 unless a song is picked up again).
+        start: f64,
     },
     Progress {
         position: f64,
@@ -150,6 +155,7 @@ enum Job {
         quality: String,
         play: bool,
         from_cache: bool,
+        start_at: f64,
     },
     /// A cached song could not be read.
     Miss { id: u64, track_id: u64, preload: bool },
@@ -239,7 +245,7 @@ impl Engine {
     /// Start playing `track` as soon as its audio has downloaded. The
     /// download runs in the background, so the engine stays responsive and
     /// a newer `Load` simply replaces this one.
-    fn load(&mut self, url: String, track: Box<Track>, quality: String, play: bool) {
+    fn load(&mut self, url: String, track: Box<Track>, quality: String, play: bool, start_at: f64) {
         self.stop_all();
         self.next = None;
         let id = self.new_id();
@@ -247,12 +253,12 @@ impl Engine {
         let tx = self.jobs_tx.clone();
         std::thread::spawn(move || {
             let result = fetch(&url, track.id, &quality).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Job::Loaded { id, result, track, quality, play, from_cache: false });
+            let _ = tx.send(Job::Loaded { id, result, track, quality, play, from_cache: false, start_at });
         });
     }
 
     /// Start `track` from the disk cache.
-    fn load_cached(&mut self, track: Box<Track>, play: bool) {
+    fn load_cached(&mut self, track: Box<Track>, play: bool, start_at: f64) {
         self.stop_all();
         self.next = None;
         let id = self.new_id();
@@ -260,7 +266,7 @@ impl Engine {
         let tx = self.jobs_tx.clone();
         std::thread::spawn(move || {
             let job = match crate::audiocache::global().and_then(|c| c.read(track.id)) {
-                Some((bytes, quality)) => Job::Loaded { id, result: Ok(bytes), track, quality, play, from_cache: true },
+                Some((bytes, quality)) => Job::Loaded { id, result: Ok(bytes), track, quality, play, from_cache: true, start_at },
                 None => Job::Miss { id, track_id: track.id, preload: false },
             };
             let _ = tx.send(job);
@@ -307,7 +313,7 @@ impl Engine {
                 }
                 let _ = ev.send(AudioEv::CacheMiss { track_id, preload });
             }
-            Job::Loaded { id, result, track, quality, play, from_cache } => {
+            Job::Loaded { id, result, track, quality, play, from_cache, start_at } => {
                 let track_id = track.id;
                 if self.loading != Some(id) {
                     return;
@@ -317,7 +323,13 @@ impl Engine {
                     .map_err(|e| anyhow!(e))
                     .and_then(|bytes| self.new_deck(bytes, track, quality, 1.0, 0.0));
                 match deck {
-                    Ok(deck) => {
+                    Ok(mut deck) => {
+                        // a song that is picked up again: be at its place before the first sound
+                        let mut began = 0.0;
+                        if start_at > 0.5 && deck.player.try_seek(Duration::from_secs_f64(start_at)).is_ok() {
+                            deck.offset = 0.0;
+                            began = start_at;
+                        }
                         if play {
                             deck.player.play();
                         }
@@ -328,6 +340,7 @@ impl Engine {
                             auto: false,
                             fade: 0.0,
                             playing: play,
+                            start: began,
                         });
                         self.cur = Some(deck);
                     }
@@ -398,6 +411,7 @@ impl Engine {
             auto: true,
             fade,
             playing: true,
+            start: 0.0,
         });
         self.cur = Some(deck);
     }
@@ -497,9 +511,10 @@ fn handle(cmd: AudioCmd, engine: &mut Engine, ev: &Sender<AudioEv>) {
             track,
             play,
             quality,
-        } => engine.load(url, track, quality, play),
+            start_at,
+        } => engine.load(url, track, quality, play, start_at),
         AudioCmd::Preload { url, track, quality } => engine.preload(url, track, quality),
-        AudioCmd::LoadCached { track, play } => engine.load_cached(track, play),
+        AudioCmd::LoadCached { track, play, start_at } => engine.load_cached(track, play, start_at),
         AudioCmd::PreloadCached { track } => engine.preload_cached(track),
         AudioCmd::ClearPreload => engine.next = None,
         AudioCmd::SetTransition(t) => {

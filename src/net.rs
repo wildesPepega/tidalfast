@@ -79,6 +79,10 @@ pub enum Cmd {
         title: String,
         track_ids: Vec<u64>,
     },
+    /// What kind of release an album is (single, EP, album), for Discord.
+    AlbumInfo {
+        id: u64,
+    },
     /// Lyrics and credits for the full-screen player.
     LoadTrackInfo {
         track_id: u64,
@@ -167,6 +171,11 @@ pub enum Ev {
     Credits {
         track_id: u64,
         groups: Vec<CreditGroup>,
+    },
+    /// The release type of an album (`SINGLE`, `EP`, `ALBUM` …); `None` if it could not be found out.
+    AlbumKind {
+        id: u64,
+        kind: Option<String>,
     },
     /// Text for the clipboard.
     Copy(String),
@@ -372,6 +381,16 @@ async fn worker(
                 .await;
                 let message = format!("Playlist “{title}” created with {count} tracks");
                 finish_playlist_edit(&mut client, &ev, result, &message).await;
+            }
+            Cmd::AlbumInfo { id } => {
+                let kind = match client.album_info(id).await {
+                    Ok(album) => album.kind,
+                    Err(e) => {
+                        log::warn!("album info failed: {e:#}");
+                        None
+                    }
+                };
+                let _ = ev.send(Ev::AlbumKind { id, kind });
             }
             Cmd::LoadTrackInfo { track_id } => {
                 let lyrics = client.lyrics(track_id).await.unwrap_or_else(|e| {

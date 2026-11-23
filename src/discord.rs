@@ -33,7 +33,8 @@ pub enum DiscordCmd {
         art_url: String,
         duration: f64,
         url: String,
-        quality: String,
+        /// The second line: "Single", "EP: Name" or "Album: Name" (empty: none).
+        release: String,
     },
     SetPlaying {
         playing: bool,
@@ -43,6 +44,10 @@ pub enum DiscordCmd {
     Seek {
         position: f64,
     },
+    /// Keep showing the song while it is paused.
+    KeepWhenPaused(bool),
+    /// A new song is announced but its details are still on their way: change nothing yet.
+    Hold(bool),
     Clear,
 }
 
@@ -53,7 +58,7 @@ struct Track {
     album: String,
     art_url: String,
     url: String,
-    quality: String,
+    release: String,
     duration: i64,
 }
 
@@ -62,13 +67,17 @@ struct Track {
 struct Now {
     track: Track,
     playing: bool,
+    /// Show the song even while it is paused.
+    keep_when_paused: bool,
+    /// Publish nothing for now (the next song's second line is being looked up).
+    hold: bool,
     /// Epoch second at which position 0 of the track was (or would be) reached.
     start_epoch: i64,
 }
 
 impl Now {
     fn visible(&self) -> bool {
-        self.playing && !self.track.title.is_empty()
+        (self.playing || self.keep_when_paused) && !self.track.title.is_empty()
     }
 }
 
@@ -76,6 +85,7 @@ impl Now {
 struct Shown {
     track: Track,
     start_epoch: i64,
+    playing: bool,
     at: Instant,
 }
 
@@ -178,8 +188,8 @@ impl Worker {
                 self.want = false;
                 self.close();
             }
-            DiscordCmd::SetTrack { title, artist, album, art_url, duration, url, quality } => {
-                let track = Track { title, artist, album, art_url, url, quality, duration: duration.max(0.0) as i64 };
+            DiscordCmd::SetTrack { title, artist, album, art_url, duration, url, release } => {
+                let track = Track { title, artist, album, art_url, url, release, duration: duration.max(0.0) as i64 };
                 if track != self.now.track {
                     self.now.track = track;
                     // a new track starts from the beginning
@@ -195,6 +205,12 @@ impl Worker {
             DiscordCmd::Seek { position } => {
                 self.now.start_epoch = now_epoch() - position.max(0.0) as i64;
             }
+            DiscordCmd::KeepWhenPaused(keep) => {
+                self.now.keep_when_paused = keep;
+            }
+            DiscordCmd::Hold(hold) => {
+                self.now.hold = hold;
+            }
             DiscordCmd::Clear => {
                 self.now.track = Track::default();
             }
@@ -203,7 +219,7 @@ impl Worker {
 
     /// Bring Discord in line with `self.now`.
     fn sync(&mut self) {
-        if !self.want {
+        if !self.want || self.now.hold {
             return;
         }
         let visible = self.now.visible();
@@ -251,7 +267,9 @@ impl Worker {
         match &self.shown {
             None => true,
             Some(shown) => {
-                shown.track != self.now.track || (shown.start_epoch - self.now.start_epoch).abs() > DRIFT_SECS
+                shown.track != self.now.track
+                    || shown.playing != self.now.playing
+                    || (self.now.playing && (shown.start_epoch - self.now.start_epoch).abs() > DRIFT_SECS)
             }
         }
     }
@@ -300,7 +318,12 @@ impl Worker {
         if client.set_activity(act).is_err() {
             return false;
         }
-        self.shown = Some(Shown { track: self.now.track.clone(), start_epoch: self.now.start_epoch, at: Instant::now() });
+        self.shown = Some(Shown {
+            track: self.now.track.clone(),
+            start_epoch: self.now.start_epoch,
+            playing: self.now.playing,
+            at: Instant::now(),
+        });
         true
     }
 }
@@ -321,11 +344,13 @@ fn build_activity(now: &Now) -> activity::Activity<'static> {
         .name(if t.artist.is_empty() { fit(&t.title) } else { fit(&format!("{} by {}", t.title, t.artist)) })
         .status_display_type(activity::StatusDisplayType::Name)
         .details(fit(&t.title));
-    if !t.artist.is_empty() {
-        act = act.state(fit(&format!("by {}", t.artist)));
+    // the second line says what kind of release it is
+    if !t.release.is_empty() {
+        act = act.state(fit(&t.release));
     }
 
-    if now.start_epoch > 0 {
+    // a running clock only while it plays
+    if now.playing && now.start_epoch > 0 {
         let mut timestamps = activity::Timestamps::new().start(now.start_epoch);
         if t.duration > 0 {
             timestamps = timestamps.end(now.start_epoch + t.duration);
@@ -335,14 +360,8 @@ fn build_activity(now: &Now) -> activity::Activity<'static> {
 
     if !t.art_url.is_empty() {
         let mut assets = activity::Assets::new().large_image(t.art_url.clone());
-        let hover = match (t.album.is_empty(), t.quality.is_empty()) {
-            (false, false) => format!("{} · {}", t.album, t.quality),
-            (false, true) => t.album.clone(),
-            (true, false) => t.quality.clone(),
-            (true, true) => String::new(),
-        };
-        if !hover.is_empty() {
-            assets = assets.large_text(fit(&hover));
+        if !t.album.is_empty() {
+            assets = assets.large_text(fit(&t.album));
         }
         act = act.assets(assets);
     }
@@ -355,4 +374,56 @@ fn build_activity(now: &Now) -> activity::Activity<'static> {
 
 fn now_epoch() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now(playing: bool) -> Now {
+        Now {
+            track: Track {
+                title: "Slow Voltage".into(),
+                artist: "Neon Orchard".into(),
+                album: "Static Bloom".into(),
+                art_url: "https://example.invalid/c.jpg".into(),
+                url: "https://tidal.com/browse/track/1".into(),
+                release: "Album: Static Bloom".into(),
+                duration: 200,
+            },
+            playing,
+            start_epoch: 1_000_000,
+            ..Default::default()
+        }
+    }
+
+    fn json(now: &Now) -> serde_json::Value {
+        serde_json::to_value(build_activity(now)).unwrap()
+    }
+
+    #[test]
+    fn the_second_line_is_the_release_and_the_quality_is_gone() {
+        let v = json(&now(true));
+        assert_eq!(v["state"], "Album: Static Bloom");
+        assert_eq!(v["details"], "Slow Voltage");
+        assert_eq!(v["assets"]["large_text"], "Static Bloom", "the cover's hover text is just the album");
+        assert!(!v.to_string().to_lowercase().contains("lossless"));
+    }
+
+    #[test]
+    fn a_paused_song_has_no_running_clock() {
+        assert!(json(&now(true)).get("timestamps").is_some());
+        assert!(json(&now(false)).get("timestamps").is_none());
+    }
+
+    #[test]
+    fn shown_while_paused_only_when_asked() {
+        let mut n = now(false);
+        assert!(!n.visible());
+        n.keep_when_paused = true;
+        assert!(n.visible());
+        n.track.title.clear();
+        assert!(!n.visible(), "nothing to show");
+        assert!(now(true).visible());
+    }
 }

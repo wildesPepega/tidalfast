@@ -355,6 +355,10 @@ pub async fn worker(mut rx: UnboundedReceiver<Cmd>, ev: Sender<Ev>) {
                 let tracks = pick_tracks(&track_id.to_string(), 20);
                 let _ = ev.send(Ev::Radio { track_id, tracks });
             }
+            Cmd::AlbumInfo { id } => {
+                let kind = catalog().albums.iter().find(|a| a.id == id).and_then(|a| a.kind.clone());
+                let _ = ev.send(Ev::AlbumKind { id, kind });
+            }
             Cmd::LoadTrackInfo { track_id } => {
                 let _ = ev.send(Ev::Lyrics { track_id, lyrics: lyrics() });
                 let _ = ev.send(Ev::Credits { track_id, groups: credits() });

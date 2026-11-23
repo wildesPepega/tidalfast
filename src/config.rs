@@ -23,6 +23,8 @@ pub struct Settings {
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub discord: bool,
+    /// Keep the song in Discord while it is paused (without the running clock).
+    pub discord_when_paused: bool,
     /// Media keys and the desktop's media controls (MPRIS / Windows SMTC).
     pub media_keys: bool,
     /// Tray icon.
@@ -90,6 +92,7 @@ impl Default for Settings {
             shuffle: false,
             repeat: RepeatMode::Off,
             discord: true,
+            discord_when_paused: false,
             media_keys: true,
             tray: false,
             link_handler: true,

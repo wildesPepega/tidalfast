@@ -203,6 +203,11 @@ pub struct App {
     net: Net,
     audio: Audio,
     discord: Discord,
+    /// Release types of albums found out so far (`None`: the lookup failed).
+    album_kinds: HashMap<u64, Option<String>>,
+    album_asked: HashSet<u64>,
+    /// A song whose Discord line waits for its album's type: (track id, since when).
+    discord_wait: Option<(u64, Instant)>,
 
     user: Option<User>,
     device_code: Option<DeviceCode>,
@@ -362,6 +367,7 @@ impl App {
         let eq_shared = EqShared::new(cfg.eq.clone());
         let audio = Audio::spawn(cfg.volume, cfg.output_device.clone(), eq_shared.clone(), cfg.transition());
         let discord = Discord::spawn(cfg.discord);
+        discord.send(DiscordCmd::KeepWhenPaused(cfg.discord_when_paused));
 
         let logged_in = cfg.is_logged_in();
         let user = logged_in.then(|| User {
@@ -375,6 +381,9 @@ impl App {
             net,
             audio,
             discord,
+            album_kinds: HashMap::new(),
+            album_asked: HashSet::new(),
+            discord_wait: None,
             user,
             device_code: None,
             login_busy: false,
@@ -621,6 +630,7 @@ impl App {
                         }
                     }
                 }
+                Ev::AlbumKind { id, kind } => self.album_kind_known(id, kind),
                 Ev::Info(message) => self.toast(message),
                 Ev::Home(sections) => {
                     self.home = sections;
@@ -664,7 +674,7 @@ impl App {
                             play: self.autoplay,
                             quality: quality.clone(),
                         });
-                        self.discord_track(&track, quality);
+                        self.discord_track(&track);
                     }
                 }
                 Ev::Image {
@@ -812,7 +822,7 @@ impl App {
                         self.cfg.last_source = self.playing_from.clone();
                         self.dirty = true;
                         self.finished = false;
-                        self.discord_track(&track, quality.clone());
+                        self.discord_track(&track);
                     }
                     // the cover of the full-screen player floods over as long as the crossfade
                     self.cover_flood_secs = if auto && fade > 0.2 { fade.clamp(0.5, 20.0) } else { 1.4 };
@@ -1073,7 +1083,27 @@ impl App {
         });
     }
 
-    fn discord_track(&self, track: &Track, quality: String) {
+    /// Tell Discord about a track. Its second line needs the kind of release (single, EP, album),
+    /// which the track itself does not carry: ask for it first (the line waits a moment for it).
+    fn discord_track(&mut self, track: &Track) {
+        let Some(album_id) = track.album.as_ref().map(|a| a.id).filter(|id| *id != 0) else {
+            self.send_discord_track(track, None);
+            return;
+        };
+        match self.album_kinds.get(&album_id).cloned() {
+            Some(kind) => self.send_discord_track(track, kind.as_deref()),
+            None => {
+                if self.album_asked.insert(album_id) {
+                    self.net.send(Cmd::AlbumInfo { id: album_id });
+                }
+                self.discord_wait = Some((track.id, Instant::now()));
+                self.discord.send(DiscordCmd::Hold(true));
+            }
+        }
+    }
+
+    fn send_discord_track(&self, track: &Track, kind: Option<&str>) {
+        self.discord.send(DiscordCmd::Hold(false));
         self.discord.send(DiscordCmd::SetTrack {
             title: track.title.clone(),
             artist: track.artist_name(),
@@ -1084,8 +1114,18 @@ impl App {
                 .url
                 .clone()
                 .unwrap_or_else(|| format!("https://tidal.com/browse/track/{}", track.id)),
-            quality,
+            release: release_label(kind, &track.album_title(), &track.title),
         });
+    }
+
+    /// The album's type arrived (or did not): send the waiting song now.
+    fn album_kind_known(&mut self, id: u64, kind: Option<String>) {
+        self.album_kinds.insert(id, kind.clone());
+        let waiting = self.discord_wait.map(|(t, _)| t);
+        if let Some(track) = self.current.clone().filter(|t| Some(t.id) == waiting && t.album.as_ref().map(|a| a.id) == Some(id)) {
+            self.discord_wait = None;
+            self.send_discord_track(&track, kind.as_deref());
+        }
     }
 
     /// The track `advance` would pick next, without moving there:
@@ -1599,6 +1639,16 @@ impl App {
 
     /// Media keys, tray and close-to-tray.
     fn handle_system(&mut self, ctx: &egui::Context) {
+        // no answer about the album in time: show the song with what we can tell without it
+        if let Some((id, since)) = self.discord_wait {
+            if since.elapsed() > Duration::from_millis(2500) {
+                self.discord_wait = None;
+                if let Some(track) = self.current.clone().filter(|t| t.id == id) {
+                    self.send_discord_track(&track, None);
+                }
+            }
+        }
+
         if ctx.input(|i| i.viewport().close_requested())
             && !self.quitting
             && self.cfg.close_to_tray
@@ -3874,7 +3924,7 @@ impl App {
                     if discord {
                         self.discord.send(DiscordCmd::Connect);
                         if let Some(track) = self.current.clone() {
-                            self.discord_track(&track, self.now_quality.clone());
+                            self.discord_track(&track);
                             self.discord.send(DiscordCmd::SetPlaying {
                                 playing: self.playing,
                                 position: self.position,
@@ -3886,15 +3936,35 @@ impl App {
                     self.touch();
                 }
                 ui.label(
-                    RichText::new("Shows what you are listening to in Discord: title “by” artist, with cover art and progress.")
+                    RichText::new(
+                        "Shows what you are listening to in Discord: title and artist, whether it is a single, an EP or an \
+                         album, with cover art, progress and a button to open it on TIDAL.",
+                    )
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(10.0);
+                let mut keep = self.cfg.discord_when_paused;
+                if ui.checkbox(&mut keep, "Keep showing it while paused").changed() {
+                    self.cfg.discord_when_paused = keep;
+                    self.discord.send(DiscordCmd::KeepWhenPaused(keep));
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new("Off: the status disappears when you pause. On: it stays, without the running clock.")
+                        .size(12.5)
                         .color(TEXT_DIM),
                 );
                 if let Some(track) = &self.current {
+                    let kind = track.album.as_ref().and_then(|a| self.album_kinds.get(&a.id)).cloned().flatten();
+                    let release = release_label(kind.as_deref(), &track.album_title(), &track.title);
                     ui.add_space(12.0);
                     ui::card().show(ui, |ui| {
                         ui.label(RichText::new("Preview").size(12.0).color(TEXT_DIM));
+                        ui.label(RichText::new(format!("{} by {}", track.title, track.artist_name())).size(12.5).color(TEXT_DIM));
                         ui.label(RichText::new(&track.title).strong());
-                        ui.label(RichText::new(format!("by {}", track.artist_name())).color(TEXT_DIM));
+                        if !release.is_empty() {
+                            ui.label(RichText::new(release).color(TEXT_DIM));
+                        }
                     });
                 }
             }
@@ -5494,6 +5564,25 @@ fn clock_seed() -> u64 {
 }
 
 /// A pseudo-random number in `0..n` (`0` for `n <= 1`).
+/// The second line of the Discord status: "Single", "EP: Name" or "Album: Name".
+/// Without the album's type (`kind`) a release named like the track counts as a single.
+fn release_label(kind: Option<&str>, album: &str, track_title: &str) -> String {
+    let album = album.trim();
+    let plain = |t: &str| {
+        let t = t.to_lowercase();
+        t.trim().trim_end_matches("- single").trim_end_matches("(single)").trim().to_string()
+    };
+    match kind.map(str::to_uppercase).as_deref() {
+        Some("SINGLE") => "Single".to_string(),
+        Some("EP") if !album.is_empty() => format!("EP: {album}"),
+        Some(_) if !album.is_empty() => format!("Album: {album}"),
+        Some(_) => String::new(),
+        None if album.is_empty() => String::new(),
+        None if plain(album) == plain(track_title) => "Single".to_string(),
+        None => format!("Album: {album}"),
+    }
+}
+
 /// Lines for the empty search field.
 const SEARCH_HINTS: &[&str] = &[
     "What do you want to listen to?",
@@ -5766,6 +5855,22 @@ mod debug_shot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_discord_line_says_single_ep_or_album() {
+        assert_eq!(release_label(Some("SINGLE"), "Midnight Signals - Single", "Midnight Signals"), "Single");
+        assert_eq!(release_label(Some("EP"), "Soft Circuitry", "Slow Voltage"), "EP: Soft Circuitry");
+        assert_eq!(release_label(Some("ALBUM"), "Static Bloom", "Slow Voltage"), "Album: Static Bloom");
+        assert_eq!(release_label(Some("album"), "Static Bloom", "x"), "Album: Static Bloom");
+        // other release types (compilations …) are albums for this purpose
+        assert_eq!(release_label(Some("COMPILATION"), "Best Of", "x"), "Album: Best Of");
+        // type unknown: a release named like the track is a single, anything else an album
+        assert_eq!(release_label(None, "Paper Lanterns", "Paper Lanterns"), "Single");
+        assert_eq!(release_label(None, "Paper Lanterns (Single)", "paper lanterns"), "Single");
+        assert_eq!(release_label(None, "Static Bloom", "Golden Static"), "Album: Static Bloom");
+        assert_eq!(release_label(None, "", "Golden Static"), "");
+        assert_eq!(release_label(Some("EP"), "", "x"), "");
+    }
 
     #[test]
     fn the_search_hint_changes_at_every_start() {

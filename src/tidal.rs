@@ -762,6 +762,15 @@ impl TidalClient {
         serde_json::from_value(value).context("parsing artist")
     }
 
+    /// An album's details (its type, track count, release date).
+    pub async fn album_info(&mut self, id: u64) -> Result<Album> {
+        let cc = self.country_code.clone();
+        let value = self
+            .get_value(&format!("{API_URL}/albums/{id}"), &[("countryCode", &cc)])
+            .await?;
+        serde_json::from_value(value).context("parsing album")
+    }
+
     /// An artist's releases; `filter` is `ALBUMS`, `EPSANDSINGLES` or `COMPILATIONS`.
     /// Newest first.
     /// All releases of an artist for one filter, each release once. TIDAL

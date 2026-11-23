@@ -51,12 +51,14 @@ pub enum CoverEffect {
     Iris,
     /// The cover is blown up, falls apart into shards and puts itself together as the new one.
     Explode,
+    /// A glowing wave with ripples sweeps diagonally across (after Radiant Lyrics).
+    Wave,
     /// A different one every song.
     Random,
 }
 
 impl CoverEffect {
-    pub const ALL: [CoverEffect; 11] = [
+    pub const ALL: [CoverEffect; 12] = [
         CoverEffect::Liquid,
         CoverEffect::Ripple,
         CoverEffect::Dissolve,
@@ -67,6 +69,7 @@ impl CoverEffect {
         CoverEffect::Glitch,
         CoverEffect::Iris,
         CoverEffect::Explode,
+        CoverEffect::Wave,
         CoverEffect::Random,
     ];
 
@@ -82,6 +85,7 @@ impl CoverEffect {
             CoverEffect::Glitch => "Glitch",
             CoverEffect::Iris => "Clock wipe",
             CoverEffect::Explode => "Explode",
+            CoverEffect::Wave => "Wave",
             CoverEffect::Random => "Random",
         }
     }
@@ -99,6 +103,7 @@ impl CoverEffect {
             CoverEffect::Glitch,
             CoverEffect::Iris,
             CoverEffect::Explode,
+            CoverEffect::Wave,
         ];
         match self {
             CoverEffect::Random => {
@@ -593,6 +598,57 @@ vec3 iris(vec2 p, float t) {
     return col;
 }
 
+// ---- 10: wave. Ported from the cover transition of Radiant Lyrics by meowarex
+// (https://github.com/meowarex/TidaLuna-Plugins, GPL-3.0): a glowing wave with ripples sweeps
+// diagonally across the cover; a ring swells from the middle halfway through.
+float wv_noise(vec2 q) { return noise(q); }
+float wv_octaves(vec2 q) {
+    float acc = 0.0, amp = 0.5;
+    for (int k = 0; k < 4; k++) { acc += amp * wv_noise(q); q = q * 2.03 + 17.1; amp *= 0.5; }
+    return acc;
+}
+vec2 mirror_uv(vec2 uv) { return 1.0 - abs(1.0 - mod(uv, 2.0)); }
+vec3 wv_fringe(sampler2D s, vec2 uv, vec2 off) {
+    return vec3(sample_tex(s, mirror_uv(uv + off)).r, sample_tex(s, mirror_uv(uv)).g, sample_tex(s, mirror_uv(uv - off)).b);
+}
+vec3 wave(vec2 uv, float t) {
+    float mixv = ease(t);
+    float clock = u_time;
+    float jitter = u_origin.x * 37.0 + u_origin.y * 91.0;
+    // the colour of the new cover, punched up
+    vec3 avg = vec3(0.0);
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) avg += to_at(vec2(0.17 + 0.33 * float(i), 0.17 + 0.33 * float(j)));
+    avg /= 9.0;
+    float mean = (avg.r + avg.g + avg.b) / 3.0;
+    vec3 hue = clamp(vec3(mean) + (avg - mean) * 1.6 + 0.12, 0.0, 1.0);
+
+    vec2 fromMid = uv - 0.5;
+    float radial = length(fromMid);
+    float pulseAge = (t - 0.5) * 3.0;
+    float pulse = pulseAge >= 0.0 ? exp(-pulseAge * 2.2) : 0.0;
+    float swell = pulseAge > 0.0 ? exp(-abs(radial - pulseAge * 0.85) * 13.0) * pulse : 0.0;
+    vec2 bentUv = 0.5 + fromMid + normalize(fromMid + 1e-5) * swell * 0.04;
+    vec2 aberr = fromMid * (0.05 * swell);
+    float busy = step(0.002, mixv) * step(mixv, 0.998);
+
+    float w = uv.x * 0.74 + uv.y * 0.26 + sin(uv.y * 7.0 + clock * 1.7) * 0.045
+        + (wv_octaves(uv * 3.0 + jitter + vec2(0.0, clock * 0.08)) - 0.47) * 0.16;
+    float gap = w - mix(-0.2, 1.2, mixv);
+    float side = smoothstep(-0.01, 0.01, gap);
+    float bulge = exp(-abs(gap) * 9.0) * busy;
+    float wiggle = sin(gap * 70.0 - clock * 5.0) * exp(-abs(gap) * 7.0) * busy;
+    vec2 shove = vec2(0.74, 0.26) * (bulge * 0.07 + wiggle * 0.018);
+    vec3 shade = mix(wv_fringe(u_to, bentUv - shove, aberr + vec2(0.01 * bulge, 0.0)),
+                     wv_fringe(u_from, bentUv + shove, aberr + vec2(0.02 * bulge, 0.0)), side);
+    shade *= 1.0 + wiggle * 0.18;
+    float shine = (exp(-abs(gap) * 45.0) * 1.4 + exp(-abs(gap) * 8.0) * 0.25) * busy;
+    vec3 hueLight = mix(hue, vec3(1.0), 0.55);
+    float headroom = 1.0 - 0.65 * dot(shade, vec3(0.3, 0.6, 0.1));
+    shade += shine * 0.3 * hueLight * headroom;
+    shade += swell * 0.1 * headroom;
+    return shade;
+}
+
 void main() {
     // rounded corners
     vec2 q = abs(uv - 0.5) - (0.5 - 0.06);
@@ -613,7 +669,8 @@ void main() {
     else if (u_effect == 5) { col = push(uv, t); }
     else if (u_effect == 6) { col = pixelate(uv, t); }
     else if (u_effect == 7) { col = glitch(uv, t); }
-    else { col = iris(uv, t); }
+    else if (u_effect == 8) { col = iris(uv, t); }
+    else { col = wave(uv, t); }
 
     // light that follows the mouse, and a faint edge falloff for depth
     float dl = distance(uv, u_light);
@@ -1104,11 +1161,11 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for track in 0..200u64 {
             let id = CoverEffect::Random.shader_id(track);
-            assert!((0..10).contains(&id));
+            assert!((0..11).contains(&id));
             assert_eq!(id, CoverEffect::Random.shader_id(track));
             seen.insert(id);
         }
-        assert!(seen.len() >= 8, "{seen:?}");
+        assert!(seen.len() >= 9, "{seen:?}");
         assert_eq!(CoverEffect::Explode.shader_id(1), EXPLODE);
         assert_eq!(CoverEffect::Liquid.shader_id(5), 0);
         assert_eq!(CoverEffect::Iris.shader_id(5), 8);

@@ -3,7 +3,7 @@ name = "tidalfast"
 version = "0.6.6"
 edition = "2021"
 description = "A simple, native TIDAL client built with egui"
-license = "MIT"
+license = "GPL-3.0-only"
 
 [dependencies]
 anyhow = "1"

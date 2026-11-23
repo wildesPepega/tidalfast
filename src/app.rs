@@ -4371,6 +4371,21 @@ impl App {
                         .size(12.0)
                         .color(TEXT_DIM),
                 );
+                ui.add_space(10.0);
+                ui.label(RichText::new("Credits").strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    ui.label(RichText::new("The Wave cover transition is based on").size(12.0).color(TEXT_DIM));
+                    ui.hyperlink_to(RichText::new("Radiant Lyrics").size(12.0), "https://radiant-lyrics.org");
+                    ui.label(RichText::new("by meowarex (GPL-3.0), which is based on the DJ cover transitions by").size(12.0).color(TEXT_DIM));
+                    ui.hyperlink_to(RichText::new("visiuun").size(12.0), "https://github.com/visiuun/tidaluna-plugins");
+                    ui.label(RichText::new(".").size(12.0).color(TEXT_DIM));
+                });
+                ui.label(
+                    RichText::new("tidalfast is free software under the GNU GPL v3.")
+                        .size(12.0)
+                        .color(TEXT_DIM),
+                );
             }
         }
     }

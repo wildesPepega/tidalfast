@@ -4711,10 +4711,10 @@ impl App {
 
     // ------------------------------------------------------------------ shell
 
-    /// The small notification at the bottom: a glass pill in the theme, with an icon for what
-    /// kind of message it is, sliding up, fading, and a thin line that counts down its time.
+    /// The small notification at the bottom: a quiet glass pill with a small icon and the text.
+    /// It slides up a little as it fades in and fades out again.
     fn status_toast(&mut self, ctx: &egui::Context) {
-        const LIFE: f32 = 4.0;
+        const LIFE: f32 = 3.6;
         let Some((message, at)) = &self.toast else {
             return;
         };
@@ -4727,41 +4727,29 @@ impl App {
             let t = x.clamp(0.0, 1.0);
             t * t * (3.0 - 2.0 * t)
         };
-        let appear = smooth(age / 0.28);
-        let alpha = appear * (1.0 - smooth((age - (LIFE - 0.45)) / 0.45));
+        let appear = smooth(age / 0.25);
+        let alpha = appear * (1.0 - smooth((age - (LIFE - 0.4)) / 0.4));
         let (icon, tone) = toast_kind(message);
         let fade = |c: Color32, a: f32| ui::with_alpha(c, (a * alpha).clamp(0.0, 255.0) as u8);
         egui::Area::new(egui::Id::new("toast"))
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -(PLAYER_HEIGHT + ui::GAP * 3.0) + (1.0 - appear) * 14.0))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -(PLAYER_HEIGHT + ui::GAP * 3.0) + (1.0 - appear) * 10.0))
             .interactable(false)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let galley = ui.painter().layout(
                     message.clone(),
-                    egui::FontId::proportional(14.0),
+                    egui::FontId::proportional(13.5),
                     fade(ui::TEXT, 255.0),
                     (ctx.screen_rect().width() - 140.0).clamp(160.0, 440.0),
                 );
-                let size = egui::vec2(galley.size().x + 74.0, galley.size().y.max(20.0) + 24.0);
+                let size = egui::vec2(galley.size().x + 58.0, galley.size().y.max(18.0) + 20.0);
                 let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                 let p = ui.painter();
-                let round = egui::CornerRadius::same(18);
-                // a soft light round the pill, the glass itself, and its edge
-                p.rect_filled(rect.expand(3.0), egui::CornerRadius::same(21), fade(tone, 20.0));
-                p.rect_filled(rect, round, fade(ui::lerp_color(ui::panel_solid(), tone, 0.07), 244.0));
-                p.rect_stroke(rect, round, egui::Stroke::new(1.0_f32, fade(tone, 95.0)), egui::StrokeKind::Inside);
-                // the badge with the icon
-                let badge = egui::pos2(rect.left() + 28.0, rect.center().y);
-                p.circle_filled(badge, 13.5, fade(tone, 46.0));
-                ui::paint_icon(p, badge, icon, 16.0, fade(tone, 255.0), egui::FontFamily::Proportional);
-                p.galley(egui::pos2(rect.left() + 52.0, rect.center().y - galley.size().y / 2.0 - 1.0), galley, fade(ui::TEXT, 255.0));
-                // the time left
-                let left = (1.0 - age / LIFE).clamp(0.0, 1.0);
-                let line = egui::Rect::from_min_size(
-                    egui::pos2(rect.left() + 20.0, rect.bottom() - 5.0),
-                    egui::vec2((rect.width() - 40.0) * left, 2.0),
-                );
-                p.rect_filled(line, 1.0, fade(tone, 110.0));
+                let round = egui::CornerRadius::same(14);
+                p.rect_filled(rect, round, fade(ui::panel_solid(), 240.0));
+                p.rect_stroke(rect, round, egui::Stroke::new(1.0_f32, fade(ui::TEXT, 26.0)), egui::StrokeKind::Inside);
+                ui::paint_icon(p, egui::pos2(rect.left() + 22.0, rect.center().y), icon, 16.0, fade(tone, 255.0), egui::FontFamily::Proportional);
+                p.galley(egui::pos2(rect.left() + 40.0, rect.center().y - galley.size().y / 2.0), galley, fade(ui::TEXT, 255.0));
             });
         ctx.request_repaint();
     }

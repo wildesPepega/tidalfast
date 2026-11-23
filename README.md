@@ -12,8 +12,10 @@ No Electron, no web view, just a small binary.</p>
 <p align="center">
   <a href="docs/screenshots/home.jpg"><img src="docs/screenshots/home.jpg" width="49%" alt="Home with mixes and playlists"></a>
   <a href="docs/screenshots/playlist.jpg"><img src="docs/screenshots/playlist.jpg" width="49%" alt="A playlist"></a>
-  <a href="docs/screenshots/now-playing.jpg"><img src="docs/screenshots/now-playing.jpg" width="49%" alt="Full-screen player with synced lyrics"></a>
+  <a href="docs/screenshots/now-playing.jpg"><img src="docs/screenshots/now-playing.jpg" width="49%" alt="Full-screen player: tilting 3D cover and karaoke-style lyrics"></a>
+  <a href="docs/screenshots/now-playing-liquid.jpg"><img src="docs/screenshots/now-playing-liquid.jpg" width="49%" alt="The next cover flooding over the old one like a liquid"></a>
   <a href="docs/screenshots/queue.jpg"><img src="docs/screenshots/queue.jpg" width="49%" alt="Queue"></a>
+  <a href="docs/screenshots/playlist-closed.jpg"><img src="docs/screenshots/playlist-closed.jpg" width="49%" alt="Collapsed library"></a>
   <a href="docs/screenshots/search.jpg"><img src="docs/screenshots/search.jpg" width="49%" alt="Search"></a>
   <a href="docs/screenshots/artist.jpg"><img src="docs/screenshots/artist.jpg" width="49%" alt="Artist page"></a>
   <a href="docs/screenshots/equalizer.jpg"><img src="docs/screenshots/equalizer.jpg" width="49%" alt="Parametric equalizer"></a>
@@ -31,7 +33,7 @@ No Electron, no web view, just a small binary.</p>
 - **Queue, shuffle and repeat**, with the last played track restored on startup.
 - **Gapless playback or crossfade** between tracks (length adjustable).
 - **10-band equalizer** with a live spectrum/meter display.
-- **Lyrics and credits** for the playing track.
+- **Full-screen player:** the cover is a 3D plate that tilts towards your mouse; when the song changes, the next cover floods over it like a liquid (as long as your crossfade lasts). Synced lyrics are karaoke-style: the line being sung is bright, its words fill in as they are sung, and the column glides along (click a line to jump there). Credits are one tab away.
 - **Spotify playlist import:** paste a public Spotify playlist link, tidalfast matches the songs on TIDAL and creates a TIDAL playlist from them.
 - **Robust Spotify links:** track, album, artist and playlist links (also `spotify.link` short links and links inside pasted text) are converted via linkhop; if linkhop is down or doesn't know a link, tidalfast reads the Spotify page itself and matches it on TIDAL. Requests are retried automatically.
 - **Link handler:** `tidal:` and `spotify:` links (for example clicked in Discord) open in the app.

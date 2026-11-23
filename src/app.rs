@@ -5612,8 +5612,17 @@ fn liked_art(ui: &mut egui::Ui, size: f32) -> egui::Response {
 /// `dim`: black overlay strength (0‥255), baked into the colours so it covers
 /// exactly the same area as the art, down to the last edge pixel.
 fn paint_liked_art(painter: &egui::Painter, rect: egui::Rect, radius: f32, dim: u8) {
-    let (a, b) = (Color32::from_rgb(166, 227, 161), Color32::from_rgb(137, 220, 235));
-    let mid = Color32::from_rgb(148, 226, 213);
+    // the default look keeps its green-to-cyan; with a theme from the cover the tile takes the accent
+    // and a neighbouring hue, so it belongs to the rest of the colours
+    let (a, b, mid) = if ui::accent_hue().is_some() {
+        let accent = ui::accent();
+        let (h, s, l) = ui::to_hsl(accent);
+        let a = ui::lerp_color(accent, Color32::WHITE, 0.10);
+        let b = ui::from_hsl((h + 0.13).rem_euclid(1.0), s.clamp(0.35, 0.85), (l + 0.02).clamp(0.5, 0.82));
+        (a, b, ui::lerp_color(a, b, 0.5))
+    } else {
+        (Color32::from_rgb(166, 227, 161), Color32::from_rgb(137, 220, 235), Color32::from_rgb(148, 226, 213))
+    };
     // colour at a point: bilinear blend of the four corner colours
     let color_at = |p: egui::Pos2| {
         let u = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);

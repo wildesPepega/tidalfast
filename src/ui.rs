@@ -55,6 +55,8 @@ impl Default for Theme {
 static ACCENT_BITS: AtomicU32 = AtomicU32::new(0);
 static TINT_BITS: AtomicU32 = AtomicU32::new(0);
 static LIGHT_BITS: AtomicU32 = AtomicU32::new(0);
+/// The three colours of the song's wallpaper (as they glide from song to song).
+static WALL_BITS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
 fn pack(c: Color32) -> u32 {
     u32::from_be_bytes([1, c.r(), c.g(), c.b()])
@@ -66,6 +68,24 @@ fn unpack(bits: u32, fallback: Color32) -> Color32 {
     }
     let [_, r, g, b] = bits.to_be_bytes();
     Color32::from_rgb(r, g, b)
+}
+
+/// Tell the widgets the wallpaper's current colours (every frame, they glide).
+pub fn set_wall_colors(colors: &[Color32; 3]) {
+    for (slot, c) in WALL_BITS.iter().zip(colors) {
+        slot.store(pack(*c), Ordering::Relaxed);
+    }
+}
+
+/// The colours of the "Liked songs" tile: the wallpaper's three colours, made bright and clear
+/// enough for a dark heart on top. They follow the song like the rest of the theme.
+pub fn liked_colors() -> [Color32; 3] {
+    let bright = |c: Color32| {
+        let (h, s, _) = to_hsl(c);
+        from_hsl(h, (s * 0.9).clamp(0.45, 0.85), 0.72)
+    };
+    let wall = |i: usize| unpack(WALL_BITS[i].load(Ordering::Relaxed), DEFAULT_PALETTE[i]);
+    [bright(wall(0)), bright(wall(1)), bright(wall(2))]
 }
 
 /// Make this the theme all widgets draw with.

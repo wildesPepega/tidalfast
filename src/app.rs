@@ -4841,6 +4841,7 @@ impl eframe::App for App {
         let (secs, head) = if age < 2.5 { (self.cover_flood_secs.clamp(1.4, 10.0), age) } else { (1.0, 0.0) };
         let lerp3 = |a: [Color32; 3], b: [Color32; 3], t: f32| [ui::lerp_color(a[0], b[0], t), ui::lerp_color(a[1], b[1], t), ui::lerp_color(a[2], b[2], t)];
         self.bg_colors = self.bg_glide.at(now, target, secs, head, lerp3);
+        ui::set_wall_colors(&self.bg_colors);
         let theme = self.theme_glide.at(now, target_theme, secs, head, ui::lerp_theme);
         let moving = !self.bg_glide.done(now) || !self.theme_glide.done(now);
         if theme != self.theme {
@@ -5607,22 +5608,13 @@ fn liked_art(ui: &mut egui::Ui, size: f32) -> egui::Response {
     resp
 }
 
-/// The green-to-cyan "liked songs" tile with a heart, with rounded corners
+/// The "liked songs" tile (the wallpaper's colours) with a heart, with rounded corners
 /// like every other cover (so hover overlays line up with it).
 /// `dim`: black overlay strength (0‥255), baked into the colours so it covers
 /// exactly the same area as the art, down to the last edge pixel.
 fn paint_liked_art(painter: &egui::Painter, rect: egui::Rect, radius: f32, dim: u8) {
-    // the default look keeps its green-to-cyan; with a theme from the cover the tile takes the accent
-    // and a neighbouring hue, so it belongs to the rest of the colours
-    let (a, b, mid) = if ui::accent_hue().is_some() {
-        let accent = ui::accent();
-        let (h, s, l) = ui::to_hsl(accent);
-        let a = ui::lerp_color(accent, Color32::WHITE, 0.10);
-        let b = ui::from_hsl((h + 0.13).rem_euclid(1.0), s.clamp(0.35, 0.85), (l + 0.02).clamp(0.5, 0.82));
-        (a, b, ui::lerp_color(a, b, 0.5))
-    } else {
-        (Color32::from_rgb(166, 227, 161), Color32::from_rgb(137, 220, 235), Color32::from_rgb(148, 226, 213))
-    };
+    // the tile wears the colours of the wallpaper, so it follows the song like everything else
+    let [a, mid, b] = ui::liked_colors();
     // colour at a point: bilinear blend of the four corner colours
     let color_at = |p: egui::Pos2| {
         let u = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);

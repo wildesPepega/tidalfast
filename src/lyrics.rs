@@ -173,6 +173,11 @@ pub struct View {
     pub glow: bool,
     /// Lines far from the sung one are softly blurred.
     pub depth: bool,
+    /// The glow glides from word to word: where it is (in column coordinates), how big, how strong.
+    glow_pos: Pos2,
+    glow_size: egui::Vec2,
+    glow_alpha: f32,
+    glow_init: bool,
 }
 
 impl View {
@@ -265,6 +270,44 @@ impl View {
         let pointer = ctx.input(|i| i.pointer.hover_pos());
         let mut seek = None;
         let view_mid = rect.height() * 0.5;
+
+        // one glow that follows the singing: it sits at the sung edge of the current word and glides
+        // (also across lines) instead of a new one lighting up for every word
+        if self.glow {
+            let mut target: Option<(Pos2, egui::Vec2)> = None;
+            if let Some(i) = sung_now {
+                let (line, lay) = (&self.lines[i], &self.layout[i]);
+                if !line.words.is_empty() && time < line.end + 0.35 {
+                    let idx = line.words.iter().rposition(|w| w.start <= time).unwrap_or(0);
+                    let (w, b) = (&line.words[idx], &lay.words[idx]);
+                    let fill = (((time - w.start) / (w.end - w.start).max(0.05)).clamp(0.0, 1.0)) as f32;
+                    target = Some((Pos2::new(b.x + b.w * fill, lay.top + b.y + ROW_HEIGHT * 0.5), egui::vec2(34.0 + b.w * 0.35, ROW_HEIGHT * 0.85)));
+                }
+            }
+            let ease = |rate: f32| 1.0 - (-dt * rate).exp();
+            match target {
+                Some((pos, size)) => {
+                    // after a seek, or from nothing: appear in place instead of flying over
+                    if !self.glow_init || self.glow_alpha < 0.03 || (pos - self.glow_pos).length() > 420.0 {
+                        self.glow_pos = pos;
+                        self.glow_size = size;
+                        self.glow_alpha = self.glow_alpha.min(0.02);
+                        self.glow_init = true;
+                    }
+                    self.glow_pos += (pos - self.glow_pos) * ease(11.0);
+                    self.glow_size += (size - self.glow_size) * ease(9.0);
+                    self.glow_alpha += (1.0 - self.glow_alpha) * ease(7.0);
+                }
+                None => self.glow_alpha += (0.0 - self.glow_alpha) * ease(6.0),
+            }
+            if self.glow_alpha > 0.02 {
+                let at = Pos2::new(inner.left() + self.glow_pos.x, rect.top() + self.glow_pos.y - self.scroll);
+                let edge = smoothstep(rect.top(), rect.top() + 70.0, at.y).min(1.0 - smoothstep(rect.bottom() - 90.0, rect.bottom(), at.y));
+                let halo = ui::lerp_color(TEXT, ui::accent(), 0.6);
+                ui::soft_ellipse(&painter, at, self.glow_size, with_alpha_f(halo, 0.30 * self.glow_alpha * edge));
+                ctx.request_repaint();
+            }
+        }
         for (i, (line, lay)) in self.lines.iter().zip(&self.layout).enumerate() {
             let y0 = rect.top() + lay.top - self.scroll;
             if y0 > rect.bottom() + 40.0 || y0 + lay.height < rect.top() - 40.0 {
@@ -324,16 +367,6 @@ impl View {
                 painter.text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, 0.40 * edge));
                 if fill > 0.0 {
                     let clip = Rect::from_min_max(Pos2::new(pos.x - 2.0, pos.y - 4.0), Pos2::new(pos.x + b.w * fill + 1.0, pos.y + ROW_HEIGHT));
-                    if self.glow {
-                        // a soft glow behind the word being sung that stays a moment and fades like a comet's tail
-                        let tail = (-((time - w.end).max(0.0) as f32) * 2.6).exp();
-                        let halo = ui::lerp_color(TEXT, ui::accent(), 0.6);
-                        let sung = b.w * fill;
-                        let centre = Pos2::new(pos.x + sung * 0.5, pos.y + ROW_HEIGHT * 0.5);
-                        if tail > 0.02 {
-                            ui::soft_ellipse(&painter, centre, egui::vec2(sung * 0.5 + 30.0, ROW_HEIGHT * 0.85), with_alpha_f(halo, 0.30 * tail * edge));
-                        }
-                    }
                     painter.with_clip_rect(clip.intersect(rect)).text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, edge));
                 }
             }

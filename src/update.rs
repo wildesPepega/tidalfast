@@ -265,11 +265,24 @@ fn old_path(target: &std::path::Path) -> PathBuf {
     target.with_file_name(name)
 }
 
-/// Delete what an update on Windows left behind (called at startup).
+/// Delete what an update on Windows left behind (called at startup, after the wait for the old
+/// process). The old program is still running for a moment and Windows will not delete a running
+/// file, so this keeps trying in the background for a while.
 pub fn clean_up() {
     #[cfg(windows)]
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(old_path(&exe));
+        let old = old_path(&exe);
+        if old.exists() {
+            let _ = std::thread::Builder::new().name("tidalfast-cleanup".into()).spawn(move || {
+                for _ in 0..60 {
+                    match std::fs::remove_file(&old) {
+                        Ok(()) => return,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                        Err(_) => std::thread::sleep(std::time::Duration::from_millis(500)),
+                    }
+                }
+            });
+        }
     }
 }
 

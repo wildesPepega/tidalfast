@@ -35,12 +35,13 @@ mod update;
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,tidalfast=info")).init();
 
-    update::clean_up();
     // a freshly updated copy starts a moment after the old one quits
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(ms) = args.iter().position(|a| a == "--delay-start").and_then(|i| args.get(i + 1)?.parse::<u64>().ok()) {
         std::thread::sleep(std::time::Duration::from_millis(ms.min(10_000)));
     }
+    // only now: until the old process has quit, Windows keeps its file (`.old`) locked
+    update::clean_up();
 
     // `tidalfast <spotify/tidal link>`: hand over to a running instance if there is one.
     let link_arg = std::env::args().skip(1).find(|a| link::parse(a).is_some());

@@ -136,6 +136,11 @@ pub enum Ev {
         info: StreamInfo,
         preload: bool,
     },
+    /// The stream of the track to play right now could not be fetched.
+    StreamFailed {
+        track_id: u64,
+        message: String,
+    },
     Image {
         url: String,
         width: usize,
@@ -315,7 +320,10 @@ async fn worker(
                     }
                     // a failed preload just means no smooth transition
                     Err(e) if preload => log::warn!("preload resolve failed: {e:#}"),
-                    Err(e) => send_error(&ev, e),
+                    Err(e) => {
+                        log::warn!("stream failed: {e:#}");
+                        let _ = ev.send(Ev::StreamFailed { track_id, message: e.to_string() });
+                    }
                 }
             }
             Cmd::LoadArtist { id } => load_artist(&mut client, &ev, id).await,

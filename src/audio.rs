@@ -34,6 +34,8 @@ pub enum AudioCmd {
         quality: String,
     },
     ClearPreload,
+    /// Silence whatever plays right now (a skip is under way) without closing the device.
+    Halt,
     SetTransition(Transition),
     Pause,
     Toggle,
@@ -444,6 +446,11 @@ fn handle(cmd: AudioCmd, engine: &mut Engine, ev: &Sender<AudioEv>) {
                 }
                 let _ = ev.send(AudioEv::Paused(!resume));
             }
+        }
+        AudioCmd::Halt => {
+            engine.next = None;
+            engine.loading = None;
+            engine.stop_all();
         }
         AudioCmd::Stop => {
             engine.next = None;

@@ -239,10 +239,16 @@ pub struct App {
     playing: bool,
     finished: bool,
     position: f64,
+    /// When `position` was last set: the engine reports every 200 ms, the lyrics want smooth time.
+    position_at: Instant,
     duration: f64,
     now_quality: String,
     /// Track whose stream is being resolved and loaded (rapid skips drop older ones).
     loading: Option<u64>,
+    /// Tracks in a row that could not be played.
+    stream_failures: u32,
+    /// Start the song that is being loaded as soon as it is ready (a pause meanwhile clears this).
+    autoplay: bool,
     scrub: f64,
     scrubbing: bool,
 
@@ -288,7 +294,7 @@ pub struct App {
     info_for: Option<u64>,
     lyrics: Option<Lyrics>,
     credits: Option<Vec<CreditGroup>>,
-    lyric_idx: Option<usize>,
+    lyrics_view: crate::lyrics::View,
     viz: [f32; VIZ_BARS],
     viz_ref: f32,
     avatar_rect: egui::Rect,
@@ -390,9 +396,12 @@ impl App {
             playing: false,
             finished: false,
             position: 0.0,
+            position_at: Instant::now(),
             duration: 0.0,
             now_quality: String::new(),
             loading: None,
+            stream_failures: 0,
+            autoplay: true,
             scrub: 0.0,
             scrubbing: false,
             devices: Vec::new(),
@@ -410,7 +419,7 @@ impl App {
             info_for: None,
             lyrics: None,
             credits: None,
-            lyric_idx: None,
+            lyrics_view: Default::default(),
             viz: [0.0; VIZ_BARS],
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
@@ -624,7 +633,7 @@ impl App {
                         self.audio.send(AudioCmd::Load {
                             url: info.url,
                             track: Box::new(track.clone()),
-                            play: true,
+                            play: self.autoplay,
                             quality: quality.clone(),
                         });
                         self.discord_track(&track, quality);
@@ -707,6 +716,11 @@ impl App {
                     Opened::Artist(artist) => self.open_artist(artist.id, Some(*artist)),
                     Opened::Playlist(pl) => self.open_playlist_from(*pl),
                 },
+                Ev::StreamFailed { track_id, message } => {
+                    if self.loading == Some(track_id) {
+                        self.playback_failed(message);
+                    }
+                }
                 Ev::Error(message) => {
                     self.loading = None;
                     if self.import.as_ref().is_some_and(|s| !s.loaded) {
@@ -754,6 +768,7 @@ impl App {
                         continue;
                     }
                     self.loading = None;
+                    self.stream_failures = 0;
                     if auto {
                         // the engine moved on to the preloaded track by itself
                         if let Some((idx, shuffle_pos, id)) = self.preload.take() {
@@ -779,16 +794,18 @@ impl App {
                     self.current = Some(*track);
                     self.duration = duration;
                     self.position = 0.0;
+                    self.position_at = Instant::now();
                     self.now_quality = quality;
-                    self.playing = true;
+                    self.playing = auto || self.autoplay;
                     self.discord.send(DiscordCmd::SetPlaying {
-                        playing: true,
+                        playing: self.playing,
                         position: 0.0,
                     });
                 }
                 AudioEv::Progress { position, duration } => {
                     if !self.scrubbing && self.loading.is_none() {
                         self.position = position;
+                        self.position_at = Instant::now();
                     }
                     if duration > 0.0 {
                         self.duration = duration;
@@ -807,14 +824,34 @@ impl App {
                     }
                 }
                 AudioEv::Error(message) => {
-                    self.loading = None;
-                    self.toast(message);
+                    if self.loading.is_some() {
+                        self.playback_failed(message);
+                    } else {
+                        self.toast(message);
+                    }
                 }
             }
         }
     }
 
     // --------------------------------------------------------------- playback
+
+    /// The track that was to start could not be played: nothing may keep playing under its
+    /// title, and an unavailable track should not stop the music, so go on to the next one
+    /// (a few times in a row at most, in case the whole connection is down).
+    fn playback_failed(&mut self, message: String) {
+        self.loading = None;
+        self.audio.send(AudioCmd::Halt);
+        self.stream_failures += 1;
+        let title = self.current.as_ref().map(|t| t.title.clone()).unwrap_or_default();
+        if self.stream_failures <= 3 && self.cfg.repeat != RepeatMode::One && self.nav().next().is_some() {
+            self.toast(format!("Can't play “{title}” ({message}), skipping it"));
+            self.advance(true);
+        } else {
+            self.playing = false;
+            self.toast(format!("Can't play “{title}”: {message}"));
+        }
+    }
 
     fn play_tracks(&mut self, tracks: Vec<Track>, index: usize, source: Option<String>) {
         if tracks.is_empty() {
@@ -995,11 +1032,15 @@ impl App {
         self.dirty = true;
         self.current = Some(track.clone());
         self.position = 0.0;
+        self.position_at = Instant::now();
         self.duration = track.duration as f64;
         self.playing = true;
+        self.autoplay = true;
         self.finished = false;
         self.preload = None;
         self.loading = Some(track.id);
+        // the old song must not play on while the new one loads
+        self.audio.send(AudioCmd::Halt);
         self.net.send(Cmd::ResolveTrack {
             track_id: track.id,
             preload: false,
@@ -1024,24 +1065,19 @@ impl App {
     /// The track `advance` would pick next, without moving there:
     /// (queue index, shuffle position).
     fn peek_next(&self) -> Option<(usize, Option<usize>)> {
-        if self.queue.is_empty() || self.cfg.repeat == RepeatMode::One {
+        if self.cfg.repeat == RepeatMode::One {
             return None;
         }
-        if self.shuffled() {
-            if self.shuffle_pos + 1 < self.shuffle_order.len() {
-                let pos = self.shuffle_pos + 1;
-                Some((self.shuffle_order[pos], Some(pos)))
-            } else if self.cfg.repeat == RepeatMode::All && !self.shuffle_order.is_empty() {
-                Some((self.shuffle_order[0], Some(0)))
-            } else {
-                None
-            }
-        } else if self.queue_index + 1 < self.queue.len() {
-            Some((self.queue_index + 1, None))
-        } else if self.cfg.repeat == RepeatMode::All {
-            Some((0, None))
-        } else {
-            None
+        self.nav().next()
+    }
+
+    /// The queue position, for the rules in `nav`.
+    fn nav(&self) -> crate::nav::Nav<'_> {
+        crate::nav::Nav {
+            len: self.queue.len(),
+            index: self.queue_index,
+            shuffle: self.shuffled().then_some((self.shuffle_order.as_slice(), self.shuffle_pos)),
+            repeat: self.cfg.repeat,
         }
     }
 
@@ -1081,32 +1117,16 @@ impl App {
             self.start_current();
             return;
         }
-
-        let next = if self.cfg.shuffle {
-            if self.shuffle_order.is_empty() {
-                Some(self.queue_index)
-            } else if self.shuffle_pos + 1 < self.shuffle_order.len() {
-                self.shuffle_pos += 1;
-                Some(self.shuffle_order[self.shuffle_pos])
-            } else if self.cfg.repeat == RepeatMode::All {
-                self.shuffle_pos = 0;
-                Some(self.shuffle_order[0])
-            } else {
-                None
-            }
-        } else if self.queue_index + 1 < self.queue.len() {
-            Some(self.queue_index + 1)
-        } else if self.cfg.repeat == RepeatMode::All {
-            Some(0)
-        } else {
-            None
-        };
-
-        match next {
-            Some(i) => {
+        match self.nav().next() {
+            Some((i, pos)) => {
+                if let Some(pos) = pos {
+                    self.shuffle_pos = pos;
+                }
                 self.queue_index = i;
                 self.start_current();
             }
+            // the user pressing "next" on the last track: keep playing it
+            None if !auto && !self.finished => self.toast("That was the last track in the queue".into()),
             None => {
                 self.playing = false;
                 self.finished = true;
@@ -1123,21 +1143,23 @@ impl App {
         if self.queue.is_empty() {
             return;
         }
-        if self.position > 3.0 {
+        // a few seconds in: back to the start of this track first
+        if self.position > 3.0 && !self.finished && self.loading.is_none() {
             self.seek(0.0);
             return;
         }
-        if self.cfg.shuffle {
-            if self.shuffle_pos > 0 {
-                self.shuffle_pos -= 1;
-                self.queue_index = self.shuffle_order[self.shuffle_pos];
+        match self.nav().previous() {
+            Some((i, pos)) => {
+                if let Some(pos) = pos {
+                    self.shuffle_pos = pos;
+                }
+                self.queue_index = i;
+                self.start_current();
             }
-        } else if self.queue_index > 0 {
-            self.queue_index -= 1;
-        } else if self.cfg.repeat == RepeatMode::All {
-            self.queue_index = self.queue.len() - 1;
+            // already at the beginning of the queue: play this track again from its start
+            None if self.finished || self.loading.is_some() => self.start_current(),
+            None => self.seek(0.0),
         }
-        self.start_current();
     }
 
     fn toggle_play(&mut self) {
@@ -1146,6 +1168,10 @@ impl App {
         }
         if self.finished {
             self.start_current();
+        } else if self.loading.is_some() {
+            // nothing plays yet: only decide whether the song starts once it has loaded
+            self.autoplay = !self.autoplay;
+            self.playing = self.autoplay;
         } else {
             self.audio.send(AudioCmd::Toggle);
         }
@@ -1153,6 +1179,7 @@ impl App {
 
     fn seek(&mut self, pos: f64) {
         self.position = pos;
+        self.position_at = Instant::now();
         self.sys_dirty = true;
         self.audio.send(AudioCmd::Seek(pos));
         self.discord.send(DiscordCmd::Seek { position: pos });
@@ -3379,52 +3406,32 @@ impl App {
             return None;
         }
 
-        let mut seek_to = None;
-        let pad = ui.available_height() * 0.35;
-        let active = if lyrics.synced.is_empty() {
-            None
-        } else {
-            lyrics.synced.partition_point(|(t, _)| *t <= self.position + 0.3).checked_sub(1)
-        };
-        let moved = active != self.lyric_idx;
-        egui::ScrollArea::vertical()
-            .id_salt("lyrics_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.add_space(pad);
-                if lyrics.synced.is_empty() {
-                    for line in lyrics.plain.lines() {
-                        ui.add(egui::Label::new(RichText::new(line).size(22.0).strong().color(ui::TEXT)));
-                    }
-                } else {
-                    ui.spacing_mut().item_spacing.y = 16.0;
-                    for (i, (at, line)) in lyrics.synced.iter().enumerate() {
-                        let shown = if line.is_empty() { icons::MUSIC_NOTES } else { line.as_str() };
-                        let color = if Some(i) == active {
-                            ui::TEXT
-                        } else if active.is_some_and(|a| i < a) {
-                            ui::with_alpha(TEXT_DIM, 120)
-                        } else {
-                            ui::with_alpha(TEXT_DIM, 170)
-                        };
-                        let size = if Some(i) == active { 30.0 } else { 26.0 };
-                        let resp = ui.add(
-                            egui::Label::new(RichText::new(shown).size(size).strong().color(color))
-                                .sense(egui::Sense::click()),
-                        );
-                        pointer_on_hover(&resp);
-                        if resp.clicked() {
-                            seek_to = Some(*at);
-                        }
-                        if moved && Some(i) == active {
-                            resp.scroll_to_me(Some(egui::Align::Center));
-                        }
-                    }
+        if lyrics.synced.is_empty() {
+            egui::ScrollArea::vertical().id_salt("lyrics_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_space(ui.available_height() * 0.2);
+                for line in lyrics.plain.lines() {
+                    ui.add(egui::Label::new(RichText::new(line).size(24.0).color(ui::TEXT)));
                 }
-                ui.add_space(pad);
+                ui.add_space(40.0);
             });
-        self.lyric_idx = active;
-        seek_to
+            return None;
+        }
+        let id = self.current.as_ref().map(|t| t.id).unwrap_or(0);
+        if self.lyrics_view.track != Some(id) {
+            self.lyrics_view.set(id, &lyrics.synced, self.duration);
+        }
+        let time = self.lyric_time();
+        self.lyrics_view.show(ui, time, self.playing && !self.finished)
+    }
+
+    /// The song's time as the ear has it: the engine's count, run on smoothly, a hair behind.
+    fn lyric_time(&self) -> f64 {
+        let ahead = if self.playing && !self.finished && self.loading.is_none() && !self.scrubbing {
+            self.position_at.elapsed().as_secs_f64().min(0.6)
+        } else {
+            0.0
+        };
+        self.position + ahead - 0.06
     }
 
     /// Songwriters, performers and crew; returns a clicked person who has an artist page.
@@ -4219,7 +4226,7 @@ impl eframe::App for App {
                 self.info_for = id;
                 self.lyrics = None;
                 self.credits = None;
-                self.lyric_idx = None;
+                self.lyrics_view.clear();
                 if let Some(track_id) = id {
                     self.net.send(Cmd::LoadTrackInfo { track_id });
                 }
@@ -4366,7 +4373,7 @@ impl eframe::App for App {
         let interval = if self.playing && self.settings_open && self.settings_tab == SettingsTab::Equalizer {
             33
         } else if self.playing && self.now_open {
-            60
+            16
         } else if self.playing || self.login_busy || self.playlists_loading {
             150
         } else {
@@ -5480,6 +5487,7 @@ mod debug_shot {
                     let track = self.queue[self.queue_index].clone();
                     self.duration = track.duration as f64;
                     self.position = 0.0;
+                    self.position_at = Instant::now();
                     self.current = Some(track);
                     self.cover_flood_secs = 3.0;
                 }

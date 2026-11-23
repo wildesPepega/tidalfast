@@ -17,7 +17,9 @@ mod ipc;
 #[cfg(target_os = "linux")]
 mod kwin;
 mod link;
+mod lyrics;
 mod model;
+mod nav;
 mod net;
 mod overlay;
 mod system;

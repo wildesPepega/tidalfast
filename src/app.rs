@@ -1704,8 +1704,8 @@ impl App {
         // Two equal rounded squares at the ends of the bar. The home button is only
         // up here in the full-screen player; otherwise it lives in the library.
         let size = egui::vec2(HEADER_HEIGHT, HEADER_HEIGHT);
-        let home_tile = egui::Rect::from_center_size(egui::pos2(rect.left() + size.x / 2.0, rect.center().y), size);
-        let settings_tile = egui::Rect::from_center_size(egui::pos2(rect.right() - size.x / 2.0, rect.center().y), size);
+        let home_tile = egui::Rect::from_min_size(rect.left_top(), size);
+        let settings_tile = egui::Rect::from_min_size(egui::pos2(rect.right() - size.x, rect.top()), size);
 
         if self.user.is_some() && full {
             let home = ui.interact(home_tile, egui::Id::new("home_button"), egui::Sense::click());
@@ -1721,13 +1721,8 @@ impl App {
         }
 
         // centre: search
-        let width = (ui.ctx().screen_rect().width() * 0.42).clamp(300.0, 520.0).min((rect.width() - 2.0 * (HEADER_HEIGHT + 24.0)).max(160.0));
-        // centred on the window when there is room, else squeezed between the buttons
-        let window_mid = ui.ctx().screen_rect().center().x;
-        let half = width / 2.0;
-        let mid_x = window_mid.clamp(rect.left() + half + 12.0, (rect.right() - HEADER_HEIGHT - 12.0 - half).max(rect.left() + half + 12.0));
-        let search_center = egui::pos2(mid_x, rect.center().y);
-        let center = egui::Rect::from_center_size(search_center, egui::vec2(width, rect.height()));
+        let width = (rect.width() * 0.42).clamp(300.0, 520.0);
+        let center = egui::Rect::from_center_size(rect.center(), egui::vec2(width, rect.height()));
         let mut mid = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(center)
@@ -1736,7 +1731,7 @@ impl App {
         // One capsule drawn by hand: egui's own frame is switched off, so the
         // field never shows a second outline when it gets focus.
         let search_id = egui::Id::new("search_field");
-        let field = egui::Rect::from_center_size(search_center, egui::vec2(width, HEADER_HEIGHT));
+        let field = egui::Rect::from_center_size(rect.center(), egui::vec2(width, HEADER_HEIGHT));
         let focused = mid.ctx().memory(|m| m.has_focus(search_id));
         let hovered = mid.rect_contains_pointer(field);
         let border = if focused {
@@ -1901,7 +1896,10 @@ impl App {
         if home_row(ui, at_home, t) {
             self.go_home();
         }
-        ui.add_space(10.0);
+        ui.add_space(2.0);
+        let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().line_segment([line.left_center() + egui::vec2(6.0, 0.0), line.right_center() - egui::vec2(6.0, 0.0)], egui::Stroke::new(1.0_f32, ui::LINE));
+        ui.add_space(8.0);
 
         // One row of round buttons: the chevron always sits in the middle of the
         // collapsed width (under the home button); "New playlist" and the title
@@ -4415,9 +4413,9 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 let g = ui::GAP;
                 let screen = ui.max_rect();
-                let mut header = egui::Rect::from_min_max(
+                let header = egui::Rect::from_min_max(
                     screen.min + egui::vec2(g, g),
-                    egui::pos2(screen.right() - g, screen.top() + g + HEADER_BAND),
+                    egui::pos2(screen.right() - g, screen.top() + g + HEADER_HEIGHT),
                 );
                 let player = egui::Rect::from_min_max(
                     egui::pos2(screen.left() + g, screen.bottom() - g - PLAYER_HEIGHT),
@@ -4429,10 +4427,12 @@ impl eframe::App for App {
                     egui::pos2(screen.right() - g, bottom),
                 );
 
-                // The library reaches up to the top of the window: its home button sits where
-                // the header's left end is in the full-screen player, and the header (search,
-                // settings) uses the space to its right.
-                let mut library = None;
+                section(ui, "header", header, None, egui::Vec2::ZERO, |ui| self.header(ui, full));
+                if show_player {
+                    section(ui, "player", player, Some(ui::panel()), egui::vec2(18.0, 10.0), |ui| {
+                        self.player_bar(ui)
+                    });
+                }
                 if logged_in && !full {
                     let t = ui.ctx().animate_bool_with_time_and_easing(
                         egui::Id::new("library_open"),
@@ -4442,20 +4442,9 @@ impl eframe::App for App {
                     );
                     self.sidebar_t = t;
                     let width = LIBRARY_COLLAPSED + (LIBRARY_EXPANDED - LIBRARY_COLLAPSED) * t;
-                    let side = egui::Rect::from_min_max(header.min, egui::pos2(header.left() + width, bottom));
+                    let side = egui::Rect::from_min_size(body.min, egui::vec2(width, body.height()));
+                    section(ui, "library", side, Some(ui::panel()), egui::vec2(8.0, 12.0), |ui| self.library(ui));
                     body.min.x = side.right() + g;
-                    header.min.x = side.right() + g;
-                    library = Some(side);
-                }
-
-                section(ui, "header", header, None, egui::Vec2::ZERO, |ui| self.header(ui, full));
-                if show_player {
-                    section(ui, "player", player, Some(ui::panel()), egui::vec2(18.0, 10.0), |ui| {
-                        self.player_bar(ui)
-                    });
-                }
-                if let Some(side) = library {
-                    section(ui, "library", side, Some(ui::panel()), egui::vec2(8.0, 6.0), |ui| self.library(ui));
                 }
                 if logged_in && self.queue_open && !full {
                     let queue = egui::Rect::from_min_max(egui::pos2(body.right() - QUEUE_WIDTH, body.top()), body.max);
@@ -4515,9 +4504,6 @@ impl eframe::App for App {
 const PLAYER_HEIGHT: f32 = 88.0;
 /// Height of the search capsule and the round header buttons.
 const HEADER_HEIGHT: f32 = 44.0;
-/// The header row: the buttons and the search capsule sit in the middle of it, and the
-/// library's home button below the same line.
-const HEADER_BAND: f32 = 56.0;
 /// Library width with covers only, and with names.
 const LIBRARY_COLLAPSED: f32 = 72.0;
 const LIBRARY_EXPANDED: f32 = 236.0;
@@ -5347,24 +5333,31 @@ fn top_tile(
     ui::paint_icon(painter, tile.center(), icon, size, color, family);
 }
 
-/// The home entry at the top of the library: the same square tile as the header's home button
-/// in the full-screen player, with its name next to it when the library is open.
+/// The home entry at the top of the library: a tile like the covers below it, with its name when open.
 fn home_row(ui: &mut egui::Ui, active: bool, reveal: f32) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HEADER_HEIGHT), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 58.0), egui::Sense::click());
     pointer_on_hover(&resp);
     let resp = if reveal < 0.5 { resp.on_hover_text("Home") } else { resp };
-    let tile_x = ((LIBRARY_COLLAPSED - 16.0 - HEADER_HEIGHT) * 0.5).floor();
-    let tile = egui::Rect::from_min_size(rect.min + egui::vec2(tile_x, 0.0), egui::vec2(HEADER_HEIGHT, HEADER_HEIGHT));
     let hovered = ui.rect_contains_pointer(rect);
+    if active {
+        ui.painter().rect_filled(rect, 10.0, CARD_HOVER);
+    } else if hovered {
+        ui.painter().rect_filled(rect, 10.0, CARD);
+    }
+    let art_x = ((LIBRARY_COLLAPSED - 16.0 - 46.0) * 0.5).floor();
+    let art = egui::Rect::from_min_size(rect.min + egui::vec2(art_x, 6.0), egui::vec2(46.0, 46.0));
+    let fill = if active { ui::with_alpha(accent(), 46) } else { CARD_HOVER };
+    ui.painter().rect_filled(art, 8.0, fill);
+    ui.painter().rect_stroke(art, 8.0, egui::Stroke::new(1.0_f32, if active { ui::with_alpha(accent(), 140) } else { ui::EDGE }), egui::StrokeKind::Inside);
     let (color, family) = if active { (accent(), ui::fill_family()) } else { (ui::TEXT, egui::FontFamily::Proportional) };
-    top_tile(ui, tile, hovered, active, icons::HOUSE, 21.0, color, family);
+    ui::paint_icon(ui.painter(), art.center(), icons::HOUSE, 24.0, color, family);
     if reveal > 0.05 {
         let fade = ui::with_alpha(if active { accent() } else { ui::TEXT }, (reveal.clamp(0.0, 1.0) * 255.0) as u8);
         ui.painter().text(
-            egui::pos2(tile.right() + 12.0, rect.center().y),
+            egui::pos2(art.right() + 10.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             "Home",
-            egui::FontId::proportional(15.5),
+            egui::FontId::proportional(15.0),
             fade,
         );
     }

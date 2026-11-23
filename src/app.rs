@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::{self, Color32, RichText, TextureHandle};
 
+use crate::audiocache;
 use crate::audio::{Audio, AudioCmd, AudioEv, OutputDevice};
 use crate::config::{RepeatMode, Settings};
 use crate::system::{NowPlaying, SysEvent, System};
@@ -263,6 +264,8 @@ pub struct App {
     start_seek: Option<f64>,
     /// When the playing position was last written to the settings.
     position_saved: Instant,
+    /// What the song cache takes on disk, and when that was measured.
+    cache_size: Option<(u64, Instant)>,
     /// Start the song that is being loaded as soon as it is ready (a pause meanwhile clears this).
     autoplay: bool,
     scrub: f64,
@@ -376,6 +379,7 @@ impl App {
         let net = Net::spawn(cfg.country_code.clone(), tokens).expect("start network worker");
         let eq_shared = EqShared::new(cfg.eq.clone());
         let audio = Audio::spawn(cfg.volume, cfg.output_device.clone(), eq_shared.clone(), cfg.transition());
+        audiocache::configure(cfg.cache_audio, (cfg.cache_limit_gb.clamp(0.1, 100.0) as f64 * 1e9) as u64);
         let discord = Discord::spawn(cfg.discord);
         discord.send(DiscordCmd::KeepWhenPaused(cfg.discord_when_paused));
         discord.send(DiscordCmd::SetFormat(cfg.discord_format.clone()));
@@ -442,6 +446,7 @@ impl App {
             resume: None,
             start_seek: None,
             position_saved: Instant::now(),
+            cache_size: None,
             autoplay: true,
             scrub: 0.0,
             scrubbing: false,
@@ -694,7 +699,6 @@ impl App {
                             play: self.autoplay,
                             quality: quality.clone(),
                         });
-                        self.discord_track(&track, &quality);
                     }
                 }
                 Ev::Image {
@@ -844,8 +848,8 @@ impl App {
                         self.cfg.last_position = 0.0;
                         self.dirty = true;
                         self.finished = false;
-                        self.discord_track(&track, &quality);
                     }
+                    self.discord_track(&track, &quality);
                     // the cover of the full-screen player floods over as long as the crossfade
                     self.cover_flood_secs = if auto && fade > 0.2 { fade.clamp(0.5, 20.0) } else { 1.4 };
                     self.track_changed = Instant::now();
@@ -889,6 +893,14 @@ impl App {
                         playing: !paused,
                         position: self.position,
                     });
+                }
+                AudioEv::CacheMiss { track_id, preload } => {
+                    // not in the cache after all: fetch it from TIDAL as usual
+                    if !preload && self.loading == Some(track_id) {
+                        self.net.send(Cmd::ResolveTrack { track_id, preload: false });
+                    } else if preload && self.preload.is_some_and(|(_, _, id)| id == track_id) {
+                        self.net.send(Cmd::ResolveTrack { track_id, preload: true });
+                    }
                 }
                 AudioEv::Ended => {
                     if self.loading.is_none() {
@@ -1106,7 +1118,8 @@ impl App {
         // the song of the last session starts where that session stopped (once)
         self.start_seek = self.resume.take().filter(|(id, _)| *id == track.id).map(|(_, at)| at);
         self.current = Some(track.clone());
-        self.position = 0.0;
+        // a song that is picked up again shows its old position while it loads, not 0:00
+        self.position = self.start_seek.unwrap_or(0.0);
         self.position_at = Instant::now();
         self.duration = track.duration as f64;
         self.playing = true;
@@ -1116,10 +1129,15 @@ impl App {
         self.loading = Some(track.id);
         // the old song must not play on while the new one loads
         self.audio.send(AudioCmd::Halt);
-        self.net.send(Cmd::ResolveTrack {
-            track_id: track.id,
-            preload: false,
-        });
+        if audiocache::enabled() && audiocache::global().is_some_and(|c| c.has(track.id)) {
+            // played before: straight from the disk
+            self.audio.send(AudioCmd::LoadCached { track: Box::new(track.clone()), play: true });
+        } else {
+            self.net.send(Cmd::ResolveTrack {
+                track_id: track.id,
+                preload: false,
+            });
+        }
     }
 
     /// Tell Discord about a track. Its texts can use the kind of release, the year and the track
@@ -1222,10 +1240,14 @@ impl App {
             return;
         }
         self.preload = want;
-        self.net.send(Cmd::ResolveTrack {
-            track_id: id,
-            preload: true,
-        });
+        let cached = audiocache::enabled() && audiocache::global().is_some_and(|c| c.has(id));
+        match (cached, want.and_then(|(idx, _, _)| self.queue.get(idx).cloned())) {
+            (true, Some(track)) => self.audio.send(AudioCmd::PreloadCached { track: Box::new(track) }),
+            _ => self.net.send(Cmd::ResolveTrack {
+                track_id: id,
+                preload: true,
+            }),
+        }
     }
 
     fn advance(&mut self, auto: bool) {
@@ -3832,6 +3854,8 @@ impl App {
                 ui.add_space(10.0);
                 self.transition_settings(ui);
                 ui.add_space(10.0);
+                self.cache_settings(ui);
+                ui.add_space(10.0);
                 settings_label(ui, "Keyboard shortcuts");
                 // each entry: alternatives separated by " / ", keys within one by "+"
                 egui::Grid::new("shortcuts").num_columns(2).spacing([28.0, 8.0]).show(ui, |ui| {
@@ -4423,6 +4447,64 @@ impl App {
             self.quitting = true;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
+    }
+
+    /// The song cache: on/off, how big it may get, what it takes now.
+    fn cache_settings(&mut self, ui: &mut egui::Ui) {
+        settings_label(ui, "Song cache");
+        let mut on = self.cfg.cache_audio;
+        if ui::checkbox(ui, &mut on, "Keep the songs you play on disk").changed() {
+            self.cfg.cache_audio = on;
+            self.apply_cache_settings();
+        }
+        ui.label(
+            RichText::new(
+                "A song you have played starts at once next time, without asking TIDAL again, and plays without a connection. \
+                 The songs used longest ago are removed when the cache is full.",
+            )
+            .size(12.5)
+            .color(TEXT_DIM),
+        );
+        if self.cfg.cache_audio {
+            ui.add_space(6.0);
+            ui.spacing_mut().slider_width = 260.0;
+            let mut gb = self.cfg.cache_limit_gb;
+            if ui.add(egui::Slider::new(&mut gb, 0.5..=20.0).suffix(" GB").fixed_decimals(1)).changed() {
+                self.cfg.cache_limit_gb = gb;
+                self.apply_cache_settings();
+            }
+        }
+        // what it takes now (measured every few seconds while this page is open)
+        if self.cache_size.map_or(true, |(_, at)| at.elapsed() > Duration::from_secs(3)) {
+            let size = audiocache::global().map_or(0, |c| c.size());
+            self.cache_size = Some((size, Instant::now()));
+        }
+        let size = self.cache_size.map_or(0, |(s, _)| s);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Using {}", human_bytes(size))).color(TEXT_DIM));
+            if size > 0 && action_button(ui, icons::TRASH, "Clear cache", false).clicked() {
+                if let Some(cache) = audiocache::global() {
+                    cache.clear();
+                }
+                self.cache_size = None;
+            }
+        });
+        ui.ctx().request_repaint_after(Duration::from_secs(3));
+    }
+
+    fn apply_cache_settings(&mut self) {
+        let limit = (self.cfg.cache_limit_gb.clamp(0.1, 100.0) as f64 * 1e9) as u64;
+        audiocache::configure(self.cfg.cache_audio, limit);
+        if self.cfg.cache_audio {
+            // a smaller limit takes effect right away
+            std::thread::spawn(|| {
+                if let Some(cache) = audiocache::global() {
+                    cache.prune_to_limit();
+                }
+            });
+        }
+        self.touch();
     }
 
     fn transition_settings(&mut self, ui: &mut egui::Ui) {
@@ -5720,6 +5802,20 @@ fn resume_position(saved: f64, duration: u32) -> Option<f64> {
     (duration > 0 && saved.is_finite() && saved > 2.0 && saved < duration as f64 - 3.0).then_some(saved)
 }
 
+/// 1.4 GB, 320 MB …
+fn human_bytes(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1e9 {
+        format!("{:.1} GB", b / 1e9)
+    } else if b >= 1e6 {
+        format!("{:.0} MB", b / 1e6)
+    } else if b >= 1e3 {
+        format!("{:.0} kB", b / 1e3)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// Lines for the empty search field.
 const SEARCH_HINTS: &[&str] = &[
     "What do you want to listen to?",
@@ -5992,6 +6088,14 @@ mod debug_shot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_read_naturally() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(1500), "2 kB");
+        assert_eq!(human_bytes(320_000_000), "320 MB");
+        assert_eq!(human_bytes(1_450_000_000), "1.4 GB");
+    }
 
     #[test]
     fn a_restart_continues_the_song_unless_it_barely_began_or_was_over() {

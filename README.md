@@ -29,6 +29,7 @@ No Electron, no web view, just a small binary.</p>
 
 ## Features
 
+- **Song cache:** songs you have played are kept on disk (up to a size you choose, 2 GB by default, oldest removed first), so they start at once next time and play without a connection. Switch it off or clear it in *Settings → Playback*.
 - **Best quality, always.** tidalfast requests the highest quality TIDAL offers for every track (Hi-Res Lossless → Lossless FLAC → High AAC). Hi-Res streams use DASH, which the player cannot decode yet, so in practice you get lossless FLAC. There is nothing to configure.
 - **Search with link support:** search TIDAL for tracks, albums, artists and playlists, or paste a link instead. Spotify (tracks, albums, artists, playlists, `spotify:` URIs and `spotify.link` short links), YouTube / YouTube Music, TIDAL and [linkhop](https://github.com/paul-wtf/linkhop) links are converted and opened on TIDAL.
 - **Library:** your playlists, liked tracks, albums and artist pages (top tracks and releases).

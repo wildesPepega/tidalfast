@@ -33,6 +33,14 @@ pub enum AudioCmd {
         track: Box<Track>,
         quality: String,
     },
+    /// Like `Load` / `Preload`, but from the disk cache (no stream URL needed).
+    LoadCached {
+        track: Box<Track>,
+        play: bool,
+    },
+    PreloadCached {
+        track: Box<Track>,
+    },
     ClearPreload,
     /// Silence whatever plays right now (a skip is under way) without closing the device.
     Halt,
@@ -63,6 +71,11 @@ pub enum AudioEv {
         duration: f64,
     },
     Paused(bool),
+    /// A song that was meant to come from the cache is not (any more) there: look it up normally.
+    CacheMiss {
+        track_id: u64,
+        preload: bool,
+    },
     Ended,
     Error(String),
 }
@@ -136,7 +149,10 @@ enum Job {
         track: Box<Track>,
         quality: String,
         play: bool,
+        from_cache: bool,
     },
+    /// A cached song could not be read.
+    Miss { id: u64, track_id: u64, preload: bool },
 }
 
 struct Engine {
@@ -230,8 +246,38 @@ impl Engine {
         self.loading = Some(id);
         let tx = self.jobs_tx.clone();
         std::thread::spawn(move || {
-            let result = download(&url).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Job::Loaded { id, result, track, quality, play });
+            let result = fetch(&url, track.id, &quality).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Job::Loaded { id, result, track, quality, play, from_cache: false });
+        });
+    }
+
+    /// Start `track` from the disk cache.
+    fn load_cached(&mut self, track: Box<Track>, play: bool) {
+        self.stop_all();
+        self.next = None;
+        let id = self.new_id();
+        self.loading = Some(id);
+        let tx = self.jobs_tx.clone();
+        std::thread::spawn(move || {
+            let job = match crate::audiocache::global().and_then(|c| c.read(track.id)) {
+                Some((bytes, quality)) => Job::Loaded { id, result: Ok(bytes), track, quality, play, from_cache: true },
+                None => Job::Miss { id, track_id: track.id, preload: false },
+            };
+            let _ = tx.send(job);
+        });
+    }
+
+    fn preload_cached(&mut self, track: Box<Track>) {
+        let id = self.new_id();
+        let quality = crate::audiocache::global().and_then(|c| c.find(track.id)).map(|(_, q)| q).unwrap_or_default();
+        self.next = Some(Pending { id, track: track.clone(), quality, bytes: None });
+        let tx = self.jobs_tx.clone();
+        std::thread::spawn(move || {
+            let job = match crate::audiocache::global().and_then(|c| c.read(track.id)) {
+                Some((bytes, _)) => Job::Downloaded { id, result: Ok(bytes) },
+                None => Job::Miss { id, track_id: track.id, preload: true },
+            };
+            let _ = tx.send(job);
         });
     }
 
@@ -239,15 +285,30 @@ impl Engine {
         let id = self.new_id();
         self.next = Some(Pending { id, track, quality, bytes: None });
         let tx = self.jobs_tx.clone();
+        let track_id = self.next.as_ref().map(|n| n.track.id).unwrap_or(0);
+        let quality = self.next.as_ref().map(|n| n.quality.clone()).unwrap_or_default();
         std::thread::spawn(move || {
-            let result = download(&url).map_err(|e| format!("{e:#}"));
+            let result = fetch(&url, track_id, &quality).map_err(|e| format!("{e:#}"));
             let _ = tx.send(Job::Downloaded { id, result });
         });
     }
 
     fn handle_job(&mut self, job: Job, ev: &Sender<AudioEv>) {
         match job {
-            Job::Loaded { id, result, track, quality, play } => {
+            Job::Miss { id, track_id, preload } => {
+                if preload {
+                    if self.next.as_ref().map(|n| n.id) == Some(id) {
+                        self.next = None;
+                    }
+                } else if self.loading == Some(id) {
+                    self.loading = None;
+                } else {
+                    return;
+                }
+                let _ = ev.send(AudioEv::CacheMiss { track_id, preload });
+            }
+            Job::Loaded { id, result, track, quality, play, from_cache } => {
+                let track_id = track.id;
                 if self.loading != Some(id) {
                     return;
                 }
@@ -269,6 +330,14 @@ impl Engine {
                             playing: play,
                         });
                         self.cur = Some(deck);
+                    }
+                    Err(e) if from_cache => {
+                        // a damaged file in the cache: forget it and get the song again
+                        log::warn!("cached song unusable: {e:#}");
+                        if let Some(cache) = crate::audiocache::global() {
+                            cache.remove(track_id);
+                        }
+                        let _ = ev.send(AudioEv::CacheMiss { track_id, preload: false });
                     }
                     Err(e) => {
                         log::warn!("playback failed: {e:#}");
@@ -430,6 +499,8 @@ fn handle(cmd: AudioCmd, engine: &mut Engine, ev: &Sender<AudioEv>) {
             quality,
         } => engine.load(url, track, quality, play),
         AudioCmd::Preload { url, track, quality } => engine.preload(url, track, quality),
+        AudioCmd::LoadCached { track, play } => engine.load_cached(track, play),
+        AudioCmd::PreloadCached { track } => engine.preload_cached(track),
         AudioCmd::ClearPreload => engine.next = None,
         AudioCmd::SetTransition(t) => {
             engine.transition = t;
@@ -600,6 +671,18 @@ fn open_device(name: &str) -> Result<MixerDeviceSink> {
         .context("starting output stream")
 }
 
+/// Download a song and keep a copy in the cache.
+fn fetch(url: &str, track_id: u64, quality: &str) -> Result<Vec<u8>> {
+    let bytes = download(url)?;
+    if crate::audiocache::enabled() && track_id != 0 {
+        if let Some(cache) = crate::audiocache::global() {
+            cache.store(track_id, quality, &bytes);
+            cache.prune_to_limit();
+        }
+    }
+    Ok(bytes)
+}
+
 fn download(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("tidalfast/0.1")
@@ -614,4 +697,49 @@ fn download(url: &str) -> Result<Vec<u8>> {
         ));
     }
     Ok(resp.bytes().context("reading audio data")?.to_vec())
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// A one-shot HTTP server that answers every request with `body`.
+    fn serve(body: Vec<u8>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        format!("http://{addr}/song.flac")
+    }
+
+    #[test]
+    fn a_downloaded_song_is_kept_and_found_again() {
+        let dir = std::env::temp_dir().join(format!("tidalfast-fetch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("XDG_CACHE_HOME", &dir);
+        crate::audiocache::configure(true, 1 << 30);
+        let url = serve(vec![7u8; 5000]);
+
+        let bytes = fetch(&url, 31337, "LOSSLESS").unwrap();
+        assert_eq!(bytes.len(), 5000);
+        let cache = crate::audiocache::global().unwrap();
+        let (cached, quality) = cache.read(31337).expect("kept");
+        assert_eq!((cached.len(), quality.as_str()), (5000, "LOSSLESS"));
+
+        // switched off: nothing is kept
+        crate::audiocache::configure(false, 1 << 30);
+        fetch(&url, 99, "LOSSLESS").unwrap();
+        assert!(!cache.has(99));
+        crate::audiocache::configure(true, 1 << 30);
+        cache.clear();
+    }
 }

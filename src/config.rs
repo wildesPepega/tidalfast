@@ -67,6 +67,9 @@ pub struct Settings {
     pub sidebar_expanded: bool,
     /// The track that was playing when the app was last used.
     pub last_track: Option<Track>,
+    /// Keep the songs that were played on disk (start at once, work offline), and how much space they may take.
+    pub cache_audio: bool,
+    pub cache_limit_gb: f32,
     /// Where in that track playback was when the app was closed (seconds).
     pub last_position: f64,
     /// Playlist/album/mix the last track was played from (`None` for single songs).
@@ -120,6 +123,8 @@ impl Default for Settings {
             sidebar_expanded: false,
             last_track: None,
             last_position: 0.0,
+            cache_audio: true,
+            cache_limit_gb: 2.0,
             last_source: None,
             last_search_hint: usize::MAX,
         }

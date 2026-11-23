@@ -4,6 +4,7 @@
 mod animcover;
 mod app;
 mod audio;
+mod audiocache;
 mod cache;
 mod card;
 mod config;

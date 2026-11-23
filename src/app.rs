@@ -4449,11 +4449,10 @@ impl App {
             ui::card().show(ui, |ui| {
                 ui.label(RichText::new(format!("Version {} is available", release.version)).strong().color(accent()));
                 if !release.notes.is_empty() {
-                    let notes: String = release.notes.lines().take(14).collect::<Vec<_>>().join("\n");
-                    ui.add_space(4.0);
-                    egui::ScrollArea::vertical().max_height(150.0).id_salt("update_notes").show(ui, |ui| {
-                        ui.add(egui::Label::new(RichText::new(notes).size(12.5).color(TEXT_DIM)).wrap());
-                    });
+                    // the release notes, shown the way GitHub shows them
+                    let notes: String = release.notes.chars().take(8000).collect();
+                    ui.add_space(6.0);
+                    crate::markdown::show(ui, &notes);
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| match &self.update.status {
@@ -6009,7 +6008,7 @@ fn ellipsize(text: &str, max: usize) -> String {
     }
 }
 
-fn open_url(url: &str) {
+pub(crate) fn open_url(url: &str) {
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     #[cfg(target_os = "macos")]
@@ -6175,6 +6174,15 @@ mod debug_shot {
             }
             if let Ok(n) = std::env::var("TIDALFAST_SHOT_EFFECT").unwrap_or_default().parse::<usize>() {
                 self.cfg.cover_effect = crate::cover3d::CoverEffect::ALL[n % crate::cover3d::CoverEffect::ALL.len()];
+            }
+            if std::env::var_os("TIDALFAST_SHOT_UPDATE").is_some() && self.update.available.is_none() {
+                // an update with release notes (screenshots of the update dialog)
+                self.update.available = Some(crate::update::Release {
+                    version: "9.9.9".into(),
+                    notes: "## New\n- **Ink** cover transition: ink drops into the old cover and spreads in dark tendrils.\n- *Reflection* under the cover, plus a [holo foil](https://example.com) sheen.\n  - nested point with `inline code`\n- [x] Done thing\n- [ ] Open thing\n\n## Fixes\n1. The wave runs to the end.\n2. ~~Old bug~~ fixed.\n\n> Optional: switch the new effects off in Settings → Appearance.\n\n```\ntidalfast --version\n```\n\n| Platform | File |\n|---|---|\n| Linux | tidalfast-linux-x86_64 |\n| Windows | tidalfast-windows-x86_64.exe |\n".into(),
+                    page: "https://example.com".into(),
+                    asset: None,
+                });
             }
             if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
                 self.cfg.fluid_backdrop = true;

@@ -315,7 +315,10 @@ impl Cover3d {
         } else {
             1.0
         };
-        let rest = (1.0 - self.hover * 1.6).clamp(0.0, 1.0) * flip.cos().abs() * blown;
+        // (at the very edge the mouse is just outside the cover, but the plate already tilts fully:
+        // the tilt counts too, not only the hover)
+        let engaged = self.hover.max(self.tilt.length().min(1.0));
+        let rest = (1.0 - engaged * 1.6).clamp(0.0, 1.0) * flip.cos().abs() * blown;
         if rest > 0.01 {
             ui.painter().add(
                 egui::epaint::Shadow {

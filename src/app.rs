@@ -4628,13 +4628,6 @@ impl App {
         ui.set_opacity(rise);
         if let Some(logo) = login::logo(&ctx) {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(84.0, 84.0), egui::Sense::hover());
-            let breath = 0.5 + 0.5 * (time * 1.3).sin();
-            login::orb(
-                &ui.painter().with_clip_rect(rect.expand(90.0)),
-                rect.center(),
-                70.0 + 6.0 * breath,
-                ui::with_alpha(accent(), (60.0 + 36.0 * breath) as u8),
-            );
             ui.painter().image(
                 logo.id(),
                 rect,
@@ -4643,9 +4636,9 @@ impl App {
             );
         }
         ui.add_space(14.0);
-        ui.label(RichText::new("tidalfast").size(38.0).strong().color(ui::TEXT));
-        ui.add_space(2.0);
-        ui.label(RichText::new("A fast, native TIDAL client").size(15.0).color(ui::TEXT_DIM));
+        login::title(ui, "tidalfast", 38.0);
+        ui.add_space(4.0);
+        login::title(ui, "A fast, native TIDAL client", 15.5);
         ui.add_space(34.0);
 
         if let Some(code) = &self.device_code {

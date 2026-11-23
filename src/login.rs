@@ -105,3 +105,15 @@ pub fn code_tiles(ui: &mut Ui, code: &str) {
 pub fn hint(text: &str) -> RichText {
     RichText::new(text).size(12.5).color(TEXT_DIM)
 }
+
+/// Centred text that stays readable on any background: light, with a soft dark shadow.
+pub fn title(ui: &mut Ui, text: &str, size: f32) {
+    let font = FontId::proportional(size);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), TEXT);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + egui::vec2(0.0, 2.0), Sense::hover());
+    let at = rect.center_top();
+    for (dx, dy, a) in [(0.0, 1.5, 120u8), (0.0, 0.0, 70)] {
+        ui.painter().text(at + egui::vec2(dx, dy), egui::Align2::CENTER_TOP, text, font.clone(), Color32::from_black_alpha(a));
+    }
+    ui.painter().text(at, egui::Align2::CENTER_TOP, text, font, Color32::WHITE);
+}

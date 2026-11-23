@@ -122,7 +122,7 @@ pub fn panel_solid() -> Color32 {
     Color32::from_rgb(r.min(255) as u8, g.min(255) as u8, b.min(255) as u8)
 }
 
-fn to_hsl(c: Color32) -> (f32, f32, f32) {
+pub fn to_hsl(c: Color32) -> (f32, f32, f32) {
     let (r, g, b) = (c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0);
     let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
     let l = (mx + mn) / 2.0;
@@ -141,7 +141,7 @@ fn to_hsl(c: Color32) -> (f32, f32, f32) {
     (h / 6.0, s, l)
 }
 
-fn from_hsl(h: f32, s: f32, l: f32) -> Color32 {
+pub fn from_hsl(h: f32, s: f32, l: f32) -> Color32 {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let x = c * (1.0 - ((h.rem_euclid(1.0) * 6.0) % 2.0 - 1.0).abs());
     let m = l - c / 2.0;
@@ -157,7 +157,7 @@ fn from_hsl(h: f32, s: f32, l: f32) -> Color32 {
 }
 
 /// WCAG relative luminance.
-fn luminance(c: Color32) -> f32 {
+pub fn luminance(c: Color32) -> f32 {
     let lin = |v: u8| {
         let v = v as f32 / 255.0;
         if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }

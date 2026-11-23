@@ -612,7 +612,8 @@ vec3 wv_fringe(sampler2D s, vec2 uv, vec2 off) {
     return vec3(sample_tex(s, mirror_uv(uv + off)).r, sample_tex(s, mirror_uv(uv)).g, sample_tex(s, mirror_uv(uv - off)).b);
 }
 vec3 wave(vec2 uv, float t) {
-    float mixv = ease(t);
+    // nearly linear, so the wave does not crawl at the end and is gone exactly when the transition is
+    float mixv = mix(t, ease(t), 0.3);
     float clock = u_time;
     float jitter = u_origin.x * 37.0 + u_origin.y * 91.0;
     // the colour of the new cover, punched up
@@ -625,15 +626,15 @@ vec3 wave(vec2 uv, float t) {
     vec2 fromMid = uv - 0.5;
     float radial = length(fromMid);
     float pulseAge = (t - 0.5) * 3.0;
-    float pulse = pulseAge >= 0.0 ? exp(-pulseAge * 2.2) : 0.0;
-    float swell = pulseAge > 0.0 ? exp(-abs(radial - pulseAge * 0.85) * 13.0) * pulse : 0.0;
+    float pulse = pulseAge >= 0.0 ? exp(-pulseAge * 1.5) : 0.0;
+    float swell = pulseAge > 0.0 ? exp(-abs(radial - pulseAge * 0.62) * 13.0) * pulse : 0.0;
     vec2 bentUv = 0.5 + fromMid + normalize(fromMid + 1e-5) * swell * 0.04;
     vec2 aberr = fromMid * (0.05 * swell);
     float busy = step(0.002, mixv) * step(mixv, 0.998);
 
     float w = uv.x * 0.74 + uv.y * 0.26 + sin(uv.y * 7.0 + clock * 1.7) * 0.045
         + (wv_octaves(uv * 3.0 + jitter + vec2(0.0, clock * 0.08)) - 0.47) * 0.16;
-    float gap = w - mix(-0.2, 1.2, mixv);
+    float gap = w - mix(-0.3, 1.32, mixv);
     float side = smoothstep(-0.01, 0.01, gap);
     float bulge = exp(-abs(gap) * 9.0) * busy;
     float wiggle = sin(gap * 70.0 - clock * 5.0) * exp(-abs(gap) * 7.0) * busy;

@@ -32,7 +32,7 @@ pub fn backdrop(painter: &egui::Painter, rect: Rect, time: f32) {
         let x = 0.5 + 0.38 * (time * (0.11 + 0.03 * k) + k * 1.9).sin();
         let y = 0.5 + 0.34 * (time * (0.09 + 0.025 * k) + k * 2.7).cos();
         let center = Pos2::new(rect.left() + rect.width() * x, rect.top() + rect.height() * y);
-        orb(painter, center, size * (0.42 + 0.05 * (time * 0.2 + k).sin()), with_alpha(*color, 46));
+        orb(painter, center, size * (0.42 + 0.05 * (time * 0.2 + k).sin()), with_alpha(*color, 62));
     }
 }
 
@@ -79,7 +79,7 @@ pub fn secondary_button(ui: &mut Ui, label: &str) -> Response {
     ui::pointer_on_hover(&resp);
     let (fill, edge) = ui::glass_colors(resp.hovered(), false);
     ui.painter().rect_filled(rect, 18.0, fill);
-    ui.painter().rect_stroke(rect, 18.0, egui::Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(rect, 18.0, egui::Stroke::new(1.0_f32, edge), egui::StrokeKind::Inside);
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font, TEXT);
     resp
 }
@@ -96,23 +96,9 @@ pub fn code_tiles(ui: &mut Ui, code: &str) {
         let min = rect.min + egui::vec2(i as f32 * (tile.x + gap), 0.0);
         let r = Rect::from_min_size(min, tile);
         p.rect_filled(r, 11.0, ui::lerp_color(ui::panel_solid(), accent(), 0.10));
-        p.rect_stroke(r, 11.0, egui::Stroke::new(1.0, with_alpha(accent(), 110)), egui::StrokeKind::Inside);
+        p.rect_stroke(r, 11.0, egui::Stroke::new(1.0_f32, with_alpha(accent(), 110)), egui::StrokeKind::Inside);
         p.text(r.center(), egui::Align2::CENTER_CENTER, c, FontId::monospace(30.0), accent());
     }
-}
-
-/// A line of small facts under the title.
-pub fn highlights(ui: &mut Ui, items: &[&str]) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-        for item in items {
-            let galley = ui.painter().layout_no_wrap((*item).to_string(), FontId::proportional(12.5), TEXT_DIM);
-            let (rect, _) = ui.allocate_exact_size(galley.size() + egui::vec2(20.0, 10.0), Sense::hover());
-            ui.painter().rect_filled(rect, 12.0, with_alpha(accent(), 22));
-            ui.painter().rect_stroke(rect, 12.0, egui::Stroke::new(1.0, with_alpha(accent(), 50)), egui::StrokeKind::Inside);
-            ui.painter().galley(rect.center() - galley.size() / 2.0, galley, TEXT_DIM);
-        }
-    });
 }
 
 /// Small grey text.

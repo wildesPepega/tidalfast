@@ -4607,37 +4607,34 @@ impl App {
 
     // ------------------------------------------------------------ view: login
 
-    fn login_view(&mut self, ui: &mut egui::Ui) {
+    /// The sign-in screen: the whole window, drifting colour clouds, and a little in the middle.
+    fn login_view(&mut self, ui: &mut egui::Ui, area: egui::Rect) {
         use crate::login;
         let ctx = ui.ctx().clone();
         let time = ctx.input(|i| i.time) as f32;
-        let area = ui.max_rect();
-        // the whole card behind (the section's padding and the frame's margin around `area`)
-        let card_area = area.expand2(egui::vec2(8.0 + 18.0, 18.0)).shrink(7.0);
-        login::backdrop(&ctx.layer_painter(ui.layer_id()).with_clip_rect(card_area), card_area, time);
+        ui.painter().rect_filled(area, 0.0, ui::BG);
+        login::backdrop(&ui.painter().with_clip_rect(area), area, time);
         ctx.request_repaint_after(Duration::from_millis(33));
 
-        let waiting = self.device_code.is_some();
-        let card_size = egui::vec2(430.0_f32.min(area.width() - 24.0), if waiting { 470.0 } else { 440.0 });
-        let rise = ctx.animate_bool_with_time(egui::Id::new("login-in"), true, 0.5);
-        let card = egui::Rect::from_center_size(area.center() + egui::vec2(0.0, (1.0 - rise) * 18.0), card_size);
-        let fade = |c: Color32| ui::with_alpha(c, (c.a() as f32 * rise) as u8);
-        ui.painter().rect_filled(card.translate(egui::vec2(0.0, 10.0)).expand(2.0), 30.0, Color32::from_black_alpha((60.0 * rise) as u8));
-        ui.painter().rect_filled(card, 28.0, fade(ui::panel_solid()));
-        ui.painter().rect_stroke(card, 28.0, egui::Stroke::new(1.0, fade(ui::with_alpha(accent(), 70))), egui::StrokeKind::Inside);
-
+        let rise = ctx.animate_bool_with_time(egui::Id::new("login-in"), true, 0.7);
+        let column = egui::Rect::from_center_size(
+            area.center() + egui::vec2(0.0, (1.0 - rise) * 16.0 - 10.0),
+            egui::vec2(360.0_f32.min(area.width() - 32.0), 330.0),
+        );
         let mut inner = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(card.shrink2(egui::vec2(32.0, 30.0)))
-                .layout(egui::Layout::top_down(egui::Align::Center)),
+            egui::UiBuilder::new().max_rect(column).layout(egui::Layout::top_down(egui::Align::Center)),
         );
         let ui = &mut inner;
         ui.set_opacity(rise);
         if let Some(logo) = login::logo(&ctx) {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(76.0, 76.0), egui::Sense::hover());
-            // a soft glow behind the icon that breathes
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(84.0, 84.0), egui::Sense::hover());
             let breath = 0.5 + 0.5 * (time * 1.3).sin();
-            login::orb(&ui.painter().with_clip_rect(rect.expand(70.0)), rect.center(), 62.0 + 6.0 * breath, ui::with_alpha(accent(), (70.0 + 40.0 * breath) as u8));
+            login::orb(
+                &ui.painter().with_clip_rect(rect.expand(90.0)),
+                rect.center(),
+                70.0 + 6.0 * breath,
+                ui::with_alpha(accent(), (60.0 + 36.0 * breath) as u8),
+            );
             ui.painter().image(
                 logo.id(),
                 rect,
@@ -4645,21 +4642,18 @@ impl App {
                 Color32::WHITE,
             );
         }
-        ui.add_space(12.0);
-        ui.label(RichText::new("tidalfast").size(34.0).strong().color(ui::TEXT));
+        ui.add_space(14.0);
+        ui.label(RichText::new("tidalfast").size(38.0).strong().color(ui::TEXT));
         ui.add_space(2.0);
-        ui.label(RichText::new("A fast, native TIDAL client").size(14.5).color(ui::TEXT_DIM));
-        ui.add_space(16.0);
+        ui.label(RichText::new("A fast, native TIDAL client").size(15.0).color(ui::TEXT_DIM));
+        ui.add_space(34.0);
 
         if let Some(code) = &self.device_code {
-            ui.label(RichText::new("Enter this code on the TIDAL page").size(14.5).color(ui::TEXT));
-            ui.add_space(12.0);
             login::code_tiles(ui, &code.user_code);
-            ui.add_space(14.0);
+            ui.add_space(22.0);
             let url = code.uri_complete.clone().unwrap_or_else(|| code.uri.clone());
             ui.horizontal(|ui| {
-                // two buttons side by side, centred
-                let w = 230.0 + 8.0 + 90.0;
+                let w = 230.0 + 12.0 + 76.0;
                 ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                 if login::primary_button(ui, "Open in browser", true).clicked() {
                     open_url(&url);
@@ -4670,23 +4664,19 @@ impl App {
                     self.toast = Some(("Code copied".to_string(), Instant::now()));
                 }
             });
-            ui.add_space(10.0);
-            ui.label(login::hint(&url));
-            ui.add_space(14.0);
+            ui.add_space(18.0);
             ui.horizontal(|ui| {
-                let w = 190.0;
+                let w = 200.0;
                 ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                 ui.spinner();
                 ui.label(login::hint("Waiting for you to confirm…"));
             });
         } else {
-            login::highlights(ui, &["Lossless", "Synced lyrics", "Offline cache", "Tiny & fast"]);
-            ui.add_space(22.0);
             if login::primary_button(ui, "Sign in with TIDAL", !self.login_busy).clicked() {
                 self.login_busy = true;
                 self.net.send(Cmd::Login);
             }
-            ui.add_space(14.0);
+            ui.add_space(18.0);
             if self.login_busy {
                 ui.horizontal(|ui| {
                     let w = 170.0;
@@ -4694,9 +4684,6 @@ impl App {
                     ui.spinner();
                     ui.label(login::hint("Preparing connection…"));
                 });
-            } else {
-                ui.label(login::hint("Your browser opens to sign in with TIDAL."));
-                ui.label(login::hint("tidalfast never sees your password."));
             }
         }
     }
@@ -4864,6 +4851,10 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 let g = ui::GAP;
                 let screen = ui.max_rect();
+                if !logged_in {
+                    self.login_view(ui, screen);
+                    return;
+                }
                 let header = egui::Rect::from_min_max(
                     screen.min + egui::vec2(g, g),
                     egui::pos2(screen.right() - g, screen.top() + g + HEADER_HEIGHT),
@@ -4907,10 +4898,6 @@ impl eframe::App for App {
                 // the content gets its own margin inside the scroll area
                 section(ui, "main", body, Some(fill), egui::vec2(8.0, 18.0), |ui| {
                     let pad = egui::Margin::symmetric(18, 0);
-                    if self.user.is_none() {
-                        egui::Frame::new().inner_margin(pad).show(ui, |ui| self.login_view(ui));
-                        return;
-                    }
                     if full {
                         egui::Frame::new().inner_margin(pad).show(ui, |ui| self.now_playing_view(ui));
                         return;

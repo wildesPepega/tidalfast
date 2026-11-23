@@ -1644,20 +1644,22 @@ impl App {
     fn header(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
 
-        // left: home button on a frosted tile
-        let mut left = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        // as wide as the collapsed library below it
-        let (tile, home) = left.allocate_exact_size(egui::vec2(LIBRARY_COLLAPSED, 44.0), egui::Sense::click());
+        // The two round buttons sit in the middle of a library-wide column at each
+        // end, so the header is symmetric and the home button lines up with the
+        // library right below it.
+        let column = LIBRARY_COLLAPSED;
+        let size = egui::vec2(HEADER_HEIGHT, HEADER_HEIGHT);
+        let home_tile = egui::Rect::from_center_size(egui::pos2(rect.left() + column / 2.0, rect.center().y), size);
+        let settings_tile = egui::Rect::from_center_size(egui::pos2(rect.right() - column / 2.0, rect.center().y), size);
+
+        // left: home
         let at_home = self.view == View::Playlists && self.open_playlist.is_none() && !self.now_open;
         if self.user.is_some() {
+            let home = ui.interact(home_tile, egui::Id::new("home_button"), egui::Sense::click());
             pointer_on_hover(&home);
             let color = if at_home { ACCENT } else { ui::TEXT };
             let family = if at_home { ui::fill_family() } else { egui::FontFamily::Proportional };
-            top_tile(&left, tile, home.hovered(), icons::HOUSE, 21.0, color, family);
+            top_tile(ui, home_tile, home.hovered(), at_home, icons::HOUSE, 21.0, color, family);
             if home.on_hover_text("Home").clicked() {
                 self.go_home();
             }
@@ -1678,7 +1680,7 @@ impl App {
         // One capsule drawn by hand: egui's own frame is switched off, so the
         // field never shows a second outline when it gets focus.
         let search_id = egui::Id::new("search_field");
-        let field = egui::Rect::from_center_size(rect.center(), egui::vec2(width, 42.0));
+        let field = egui::Rect::from_center_size(rect.center(), egui::vec2(width, HEADER_HEIGHT));
         let focused = mid.ctx().memory(|m| m.has_focus(search_id));
         let hovered = mid.rect_contains_pointer(field);
         let border = if focused {
@@ -1688,7 +1690,7 @@ impl App {
         } else {
             egui::Stroke::new(1.0_f32, ui::EDGE)
         };
-        let capsule = egui::CornerRadius::same(21);
+        let capsule = egui::CornerRadius::same((HEADER_HEIGHT / 2.0) as u8);
         let back = mid.interact(field, search_id.with("capsule"), egui::Sense::click());
         mid.painter().rect_filled(field, capsule, if hovered || focused { CARD_HOVER } else { CARD });
         mid.painter().rect_stroke(field, capsule, border, egui::StrokeKind::Inside);
@@ -1761,26 +1763,20 @@ impl App {
         }
 
         // right: settings / account menu
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(rect)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        let (tile, resp) = right.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
+        let resp = ui.interact(settings_tile, egui::Id::new("settings_button"), egui::Sense::click());
         pointer_on_hover(&resp);
-        let open = resp.hovered() || self.profile_menu_open;
         let color = if self.profile_menu_open { ACCENT } else { ui::TEXT };
-        top_tile(&right, tile, open, icons::GEAR, 21.0, color, egui::FontFamily::Proportional);
+        top_tile(ui, settings_tile, resp.hovered(), self.profile_menu_open, icons::GEAR, 21.0, color, egui::FontFamily::Proportional);
         if self.update.available.is_some() {
             // a new version is waiting
-            let dot = tile.right_top() + egui::vec2(-8.0, 8.0);
-            right.painter().circle_filled(dot, 5.0, ui::PANEL_SOLID);
-            right.painter().circle_filled(dot, 3.5, ACCENT);
+            let dot = settings_tile.center() + egui::vec2(15.0, -15.0);
+            ui.painter().circle_filled(dot, 5.5, ui::PANEL_SOLID);
+            ui.painter().circle_filled(dot, 4.0, ACCENT);
         }
         if resp.on_hover_text("Settings").clicked() {
             self.profile_menu_open = !self.profile_menu_open;
         }
-        self.avatar_rect = tile;
+        self.avatar_rect = settings_tile;
     }
 
     /// Spotify-style profile dropdown anchored below the avatar.
@@ -1844,22 +1840,32 @@ impl App {
     fn library(&mut self, ui: &mut egui::Ui) {
         let t = self.sidebar_t;
         let mut want_create = false;
-        let mut toggle = false;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let (icon, tip) = if self.cfg.sidebar_expanded {
-                (icons::CARET_DOUBLE_LEFT, "Collapse library")
-            } else {
-                (icons::CARET_DOUBLE_RIGHT, "Expand library")
-            };
-            toggle = ui::square_icon_button(ui, icon, 56.0, 36.0).on_hover_text(tip).clicked();
-            if t > 0.6 {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let add = ui::square_icon_button(ui, icons::PLUS, 36.0, 36.0).on_hover_text("New playlist");
-                    want_create = add.clicked();
-                });
-            }
-        });
+        // One row of round buttons: the chevron always sits in the middle of the
+        // collapsed width (under the home button); "New playlist" and the title
+        // appear when the library is open.
+        let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::hover());
+        let button = egui::vec2(36.0, 36.0);
+        let (icon, tip) = if self.cfg.sidebar_expanded {
+            (icons::CARET_DOUBLE_LEFT, "Collapse library")
+        } else {
+            (icons::CARET_DOUBLE_RIGHT, "Expand library")
+        };
+        let chevron = egui::Rect::from_center_size(egui::pos2(row.left() + (LIBRARY_COLLAPSED - 16.0) / 2.0, row.center().y), button);
+        let toggle = ui::round_icon_button(ui, egui::Id::new("library_toggle"), chevron, icon).on_hover_text(tip).clicked();
+        if t > 0.3 {
+            let fade = |c: Color32| ui::with_alpha(c, (((t - 0.3) / 0.7).clamp(0.0, 1.0) * 255.0) as u8);
+            ui.painter().text(
+                egui::pos2(chevron.right() + 10.0, row.center().y),
+                egui::Align2::LEFT_CENTER,
+                "Your library",
+                egui::FontId::proportional(15.0),
+                fade(ui::TEXT),
+            );
+            let plus = egui::Rect::from_center_size(egui::pos2(row.right() - 18.0, row.center().y), button);
+            want_create = ui::round_icon_button(ui, egui::Id::new("library_add"), plus, icons::PLUS)
+                .on_hover_text("New playlist")
+                .clicked();
+        }
         if toggle {
             self.cfg.sidebar_expanded = !self.cfg.sidebar_expanded;
             self.touch();
@@ -4271,7 +4277,7 @@ impl eframe::App for App {
                 let screen = ui.max_rect();
                 let header = egui::Rect::from_min_max(
                     screen.min + egui::vec2(g, g),
-                    egui::pos2(screen.right() - g, screen.top() + g + 44.0),
+                    egui::pos2(screen.right() - g, screen.top() + g + HEADER_HEIGHT),
                 );
                 let player = egui::Rect::from_min_max(
                     egui::pos2(screen.left() + g, screen.bottom() - g - PLAYER_HEIGHT),
@@ -4358,6 +4364,8 @@ impl eframe::App for App {
 // ------------------------------------------------------------- free helpers
 
 const PLAYER_HEIGHT: f32 = 88.0;
+/// Height of the search capsule and the round header buttons.
+const HEADER_HEIGHT: f32 = 44.0;
 /// Library width with covers only, and with names.
 const LIBRARY_COLLAPSED: f32 = 72.0;
 const LIBRARY_EXPANDED: f32 = 236.0;
@@ -5157,25 +5165,34 @@ fn media_card(
 #[allow(clippy::too_many_arguments)]
 /// A square (or wide) button tile on the top bar. Dark and nearly opaque, so
 /// the icon stays readable on every wallpaper colour.
+/// A round glass button of the header.
 fn top_tile(
     ui: &egui::Ui,
     tile: egui::Rect,
     hovered: bool,
+    active: bool,
     icon: &str,
     size: f32,
     color: Color32,
     family: egui::FontFamily,
 ) {
-    let fill = if hovered {
+    let fill = if hovered || active {
         Color32::from_rgba_unmultiplied(44, 46, 64, 235)
     } else {
         Color32::from_rgba_unmultiplied(19, 20, 30, 215)
     };
     let painter = ui.painter();
-    let radius = egui::CornerRadius::same(ui::CARD_RADIUS);
-    painter.rect_filled(tile, radius, fill);
-    painter.rect_stroke(tile, radius, egui::Stroke::new(1.0_f32, ui::EDGE), egui::StrokeKind::Inside);
-    ui::paint_icon(painter, tile.center(), icon, size, color, family);
+    let (center, radius) = (tile.center(), tile.width() / 2.0);
+    painter.circle_filled(center, radius, fill);
+    let edge = if active {
+        ui::with_alpha(ACCENT, 150)
+    } else if hovered {
+        ui::with_alpha(ACCENT, 90)
+    } else {
+        ui::EDGE
+    };
+    painter.circle_stroke(center, radius - 0.5, egui::Stroke::new(1.0_f32, edge));
+    ui::paint_icon(painter, center, icon, size, color, family);
 }
 
 fn library_row(

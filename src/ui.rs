@@ -421,12 +421,12 @@ pub fn green_selection(ui: &mut Ui) {
     v.selection.stroke = Stroke::new(1.0_f32, BG);
 }
 
-/// A flat icon button with a rounded hover background.
-pub fn square_icon_button(ui: &mut Ui, icon: &str, width: f32, height: f32) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click());
+/// A round flat icon button, drawn inside `rect`.
+pub fn round_icon_button(ui: &mut Ui, id: egui::Id, rect: Rect, icon: &str) -> Response {
+    let resp = ui.interact(rect, id, Sense::click());
     pointer_on_hover(&resp);
     if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(10), CARD_HOVER);
+        ui.painter().circle_filled(rect.center(), rect.width() / 2.0, CARD_HOVER);
     }
     let color = if resp.hovered() { TEXT } else { TEXT_DIM };
     paint_icon(ui.painter(), rect.center(), icon, 18.0, color, FontFamily::Proportional);

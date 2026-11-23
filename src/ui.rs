@@ -84,6 +84,17 @@ pub fn accent_dim() -> Color32 {
     glass(70, a.r(), a.g(), a.b())
 }
 
+/// The accent's hue (0‥1) when the theme follows a cover, `None` with the default look.
+pub fn accent_hue() -> Option<f32> {
+    let a = accent();
+    (a != DEFAULT_ACCENT).then(|| to_hsl(a).0)
+}
+
+/// The dark field behind plots and meters: the glass, a little darker.
+pub fn plot_background() -> Color32 {
+    lerp_color(BG, panel_solid(), 0.5)
+}
+
 fn tint() -> Color32 {
     unpack(TINT_BITS.load(Ordering::Relaxed), DEFAULT_TINT)
 }

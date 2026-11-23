@@ -1,6 +1,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 //! tidalfast — a simple, native TIDAL client built with egui.
 
+mod animcover;
 mod app;
 mod audio;
 mod cache;

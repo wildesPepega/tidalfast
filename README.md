@@ -35,6 +35,7 @@ No Electron, no web view, just a small binary.</p>
 - **Queue, shuffle and repeat**, with the last played track restored on startup.
 - **Gapless playback or crossfade** between tracks (length adjustable).
 - **10-band equalizer** with a live spectrum/meter display.
+- **Animated covers:** albums that have a looping video on TIDAL play it in the full-screen player, and the backdrop moves along with it (switch off in *Settings → Appearance*).
 - **Theme from the cover:** the accent colour, the glass panels, menus and settings take their colours from the playing song's cover, with a fallback to the default look for grey, very dark or very bright covers so everything stays readable. Both the interface colours and the blurred cover backdrop can be switched off in *Settings → Appearance*.
 - **Full-screen player:** the cover is a 3D plate that tilts towards your mouse; when the song changes, the next cover takes over with an effect (liquid, ripple, dissolve, blinds, flip, push, pixelate, glitch, clock wipe, or a random one per song), lasting as long as your crossfade. Choose it in *Settings → Appearance*. Synced lyrics are karaoke-style: the line being sung is bright, its words fill in as they are sung, and the column glides along (click a line to jump there). Credits are one tab away.
 - **Spotify playlist import:** paste a public Spotify playlist link, tidalfast matches the songs on TIDAL and creates a TIDAL playlist from them.
@@ -112,7 +113,7 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 
 - **[SONE](https://github.com/lullabyX/sone) by lullabyX**: tidalfast builds on the work of this TIDAL desktop application. The TIDAL login flow (device authorization and the client configuration) and the way streams are resolved so that music playback works are taken from SONE. Thank you!
 - **[linkhop](https://github.com/paul-wtf/linkhop) by [paul-wtf](https://github.com/paul-wtf)**: the link conversion service tidalfast uses to open and share links across TIDAL, Spotify and YouTube. Thank you!
-- [egui / eframe](https://github.com/emilk/egui), [rodio](https://github.com/RustAudio/rodio), [cpal](https://github.com/RustAudio/cpal), [discord-rich-presence](https://crates.io/crates/discord-rich-presence), [souvlaki](https://github.com/Sinono3/souvlaki), [ksni](https://github.com/iovxw/ksni), [tray-icon](https://github.com/tauri-apps/tray-icon), [Phosphor icons](https://phosphoricons.com/) and [reqwest](https://github.com/seanmonstar/reqwest).
+- [egui / eframe](https://github.com/emilk/egui), [rodio](https://github.com/RustAudio/rodio), [cpal](https://github.com/RustAudio/cpal), [discord-rich-presence](https://crates.io/crates/discord-rich-presence), [souvlaki](https://github.com/Sinono3/souvlaki), [ksni](https://github.com/iovxw/ksni), [tray-icon](https://github.com/tauri-apps/tray-icon), [Phosphor icons](https://phosphoricons.com/) and [reqwest](https://github.com/seanmonstar/reqwest), and [OpenH264](https://github.com/cisco/openh264) (via the [openh264](https://crates.io/crates/openh264) crate, built from source) with the [mp4](https://crates.io/crates/mp4) crate for the animated covers. H.264 can be subject to patent licensing in some countries; if that matters to you, switch off *Animated covers* and build without them.
 - The TIDAL name and logo belong to TIDAL.
 
 ## License

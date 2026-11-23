@@ -11,14 +11,12 @@ use crate::eq::{
     MIN_FREQ, MIN_Q, NUM_BANDS, SPEC_BINS,
 };
 use crate::ui::{
-    card, pill, pointer_on_hover, with_alpha, accent, BG, CARD_HOVER, DANGER, LINE, OK, TEXT,
+    card, pill, pointer_on_hover, with_alpha, accent, plot_background, BG, CARD_HOVER, DANGER, LINE, OK, TEXT,
     TEXT_DIM, WARN,
 };
 
 use super::App;
 
-/// Catppuccin sky — distinct from the green spectrum behind it.
-const CURVE: Color32 = Color32::from_rgb(137, 220, 235);
 const DB_RANGE: f32 = MAX_GAIN_DB;
 const CURVE_POINTS: usize = 260;
 const GRAPH_HEIGHT: f32 = 300.0;
@@ -31,8 +29,14 @@ struct Edit {
     keep_preset: bool,
 }
 
+/// The colour of a band: a rainbow with the default look, otherwise a spread of hues around the
+/// cover's accent so the bands stay apart but belong to the theme.
 fn band_color(index: usize) -> Color32 {
-    Hsva::new(index as f32 / NUM_BANDS as f32 * 0.8 + 0.02, 0.55, 1.0, 1.0).into()
+    let at = index as f32 / (NUM_BANDS - 1).max(1) as f32;
+    match crate::ui::accent_hue() {
+        Some(hue) => Hsva::new((hue + (at - 0.5) * 0.5).rem_euclid(1.0), 0.55, 1.0, 1.0).into(),
+        None => Hsva::new(index as f32 / NUM_BANDS as f32 * 0.8 + 0.02, 0.55, 1.0, 1.0).into(),
+    }
 }
 
 fn freq_label(freq: f32) -> String {
@@ -225,7 +229,7 @@ impl App {
         let enabled = self.cfg.eq.enabled;
         let sr = self.eq_shared.sample_rate().max(8000.0);
 
-        painter.rect_filled(outer, CornerRadius::same(10), BG);
+        painter.rect_filled(outer, CornerRadius::same(10), plot_background());
         let clipped = painter.with_clip_rect(plot.expand(2.0));
         let grid = Stroke::new(1.0_f32, with_alpha(LINE, 150));
         let grid_minor = Stroke::new(1.0_f32, with_alpha(LINE, 60));
@@ -299,7 +303,7 @@ impl App {
             .enumerate()
             .map(|(i, db)| pos2(x_of(curve_freq(i, CURVE_POINTS)), y_of(db.clamp(-DB_RANGE - 4.0, DB_RANGE + 4.0))))
             .collect();
-        let line_color = if enabled { CURVE } else { Color32::from_gray(110) };
+        let line_color = if enabled { accent() } else { Color32::from_gray(110) };
         // selected band on its own
         let selected = self.eq_selected.min(NUM_BANDS - 1);
         let sel_band = self.cfg.eq.bands[selected];

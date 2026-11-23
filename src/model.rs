@@ -100,6 +100,9 @@ pub struct Album {
     pub title: String,
     #[serde(default)]
     pub cover: Option<String>,
+    /// The id of the looping video that goes with the cover (only some albums have one).
+    #[serde(default, rename = "videoCover")]
+    pub video_cover: Option<String>,
     #[serde(default)]
     pub artists: Vec<Artist>,
     #[serde(default)]

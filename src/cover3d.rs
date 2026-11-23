@@ -15,8 +15,9 @@ use eframe::glow::{self, HasContext};
 
 /// How far the plate tilts at the edge of the cover (radians).
 const MAX_TILT: f32 = 0.30;
-/// How far beyond the cover the mouse still pulls (in cover widths).
-const REACH: f32 = 0.35;
+/// How far beyond the cover the mouse still pulls (in cover widths): just a hair, so the plate
+/// only moves when the mouse is really on it.
+const REACH: f32 = 0.05;
 /// Space around the cover that the tilted plate may use (in cover widths).
 const MARGIN: f32 = 0.22;
 
@@ -267,7 +268,7 @@ impl Cover3d {
             Some(p) if rect.expand(rect.width() * REACH).contains(p) => {
                 let n = (p - rect.center()) / (rect.size() * 0.5);
                 let inside = rect.contains(p);
-                (egui::vec2(n.x.clamp(-1.0, 1.0), n.y.clamp(-1.0, 1.0)), if inside { 1.0 } else { 0.55 })
+                (egui::vec2(n.x.clamp(-1.0, 1.0), n.y.clamp(-1.0, 1.0)), if inside { 1.0 } else { 0.0 })
             }
             _ => (egui::Vec2::ZERO, 0.0),
         };
@@ -282,17 +283,25 @@ impl Cover3d {
             ctx.request_repaint();
         }
 
-        // a soft shadow that slides opposite to the tilt
-        let shadow_offset = egui::vec2(-self.tilt.x * 16.0, 16.0 - self.tilt.y * 10.0 - self.hover * 4.0);
-        ui.painter().add(
-            egui::epaint::Shadow {
-                offset: [shadow_offset.x as i8, shadow_offset.y as i8],
-                blur: 46,
-                spread: 0,
-                color: egui::Color32::from_black_alpha(150),
-            }
-            .as_shape(rect.shrink(rect.width() * 0.02), 20.0),
-        );
+        // a soft shadow while the cover rests; it fades out as soon as the mouse moves the plate
+        let flip = if self.anim.effect == 4 && progress < 1.0 {
+            let e = progress * progress * (3.0 - 2.0 * progress);
+            e * std::f32::consts::PI
+        } else {
+            0.0
+        };
+        let rest = (1.0 - self.hover * 1.6).clamp(0.0, 1.0) * flip.cos().abs();
+        if rest > 0.01 {
+            ui.painter().add(
+                egui::epaint::Shadow {
+                    offset: [0, 16],
+                    blur: 46,
+                    spread: 0,
+                    color: egui::Color32::from_black_alpha((150.0 * rest) as u8),
+                }
+                .as_shape(rect.shrink(rect.width() * 0.02), 20.0),
+            );
+        }
 
         let outer = rect.expand(rect.width() * MARGIN);
         let ppp = ctx.pixels_per_point();
@@ -306,12 +315,7 @@ impl Cover3d {
             origin: self.anim.origin,
             time: now as f32,
             effect: self.anim.effect,
-            flip: if self.anim.effect == 4 && progress < 1.0 {
-                let e = progress * progress * (3.0 - 2.0 * progress);
-                e * std::f32::consts::PI
-            } else {
-                0.0
-            },
+            flip,
         };
         let state = self.gpu.clone();
         ui.painter().add(egui::PaintCallback {

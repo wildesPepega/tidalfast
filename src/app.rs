@@ -272,6 +272,8 @@ pub struct App {
     overlay: crate::overlay::Overlay,
     /// The cover of the full-screen player and how long the next flood of it should take.
     cover3d: crate::cover3d::Cover3d,
+    /// Animated covers (the looping videos some albums have).
+    animated: crate::animcover::Covers,
     cover_flood_secs: f32,
     /// When the song last changed (the cover transition runs from then on).
     track_changed: Instant,
@@ -437,6 +439,7 @@ impl App {
             lib_click: None,
             overlay: crate::overlay::Overlay::new(),
             cover3d: Default::default(),
+            animated: Default::default(),
             cover_flood_secs: 1.4,
             track_changed: Instant::now(),
             #[cfg(target_os = "linux")]
@@ -1423,6 +1426,16 @@ impl App {
             }
             self.request_cover(&url);
         }
+    }
+
+    /// Where the animated cover of a track comes from, if its album has one.
+    fn video_source(&self, track: &Track) -> Option<String> {
+        let id = track.album.as_ref()?.video_cover.clone()?;
+        #[cfg(debug_assertions)]
+        if crate::demo::enabled() {
+            return std::env::var("TIDALFAST_DEMO_VIDEO").ok().map(|p| format!("file://{p}"));
+        }
+        Some(crate::animcover::video_url(&id, 640))
     }
 
     /// The cover the window background is made from.
@@ -3365,7 +3378,7 @@ impl App {
             Some(u) if self.textures.contains_key(u) => Some(u.clone()),
             _ => track.cover_url(COVER_NOW),
         };
-        let best = big.as_ref().and_then(|u| self.textures.get(u)).map(|t| t.id());
+        let best = self.animated.texture(track.id).or_else(|| big.as_ref().and_then(|u| self.textures.get(u)).map(|t| t.id()));
         let small = track.cover_url(COVER_NOW).and_then(|u| self.textures.get(&u)).map(|t| t.id());
         let age = self.track_changed.elapsed().as_secs_f32();
         let textures = &self.textures;
@@ -3803,6 +3816,20 @@ impl App {
                 ui.label(
                     RichText::new("The blurred cover and its colours behind the whole app. Off: a calm, fixed backdrop.")
                         .color(TEXT_DIM),
+                );
+
+                ui.add_space(14.0);
+                let mut animated = self.cfg.animated_covers;
+                if ui.checkbox(&mut animated, "Animated covers").changed() {
+                    self.cfg.animated_covers = animated;
+                    self.touch();
+                }
+                ui.label(
+                    RichText::new(
+                        "Some albums have a looping video instead of a still cover. It plays in the full-screen player and \
+                         moves the backdrop along. Off: always the still cover (saves a little power).",
+                    )
+                    .color(TEXT_DIM),
                 );
 
                 ui.add_space(18.0);
@@ -4378,6 +4405,25 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         self.ensure_wallpaper();
+        // animated cover: its pictures also move the backdrop a little
+        let video = self
+            .current
+            .as_ref()
+            .filter(|_| self.cfg.animated_covers && !self.window_hidden && self.user.is_some())
+            .and_then(|t| self.video_source(t));
+        let thumb = self.animated.update(
+            ctx,
+            self.current.as_ref().map(|t| t.id),
+            video,
+            self.playing && !self.finished,
+            self.cover_flood_secs + 1.5,
+            self.cfg.cover_backdrop,
+        );
+        if let (Some(thumb), Some(url)) = (thumb, self.wallpaper_url()) {
+            if let Some(tex) = self.blur_tex.get_mut(&url) {
+                tex.set(thumb, egui::TextureOptions::LINEAR);
+            }
+        }
         // cross-fade the backdrop when the song (cover) changes
         let ready = cover_url.clone().filter(|u| self.blur_tex.contains_key(u));
         if ready.is_some() && ready != self.wall_url {
@@ -5656,7 +5702,8 @@ mod debug_shot {
                 ctx.request_repaint_after(Duration::from_millis(100));
                 return;
             };
-            if !self.shot.requested && started.elapsed() > Duration::from_secs(6) {
+            let wait = std::env::var("TIDALFAST_SHOT_WAIT").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(6);
+            if !self.shot.requested && started.elapsed() > Duration::from_secs(wait) {
                 self.shot.requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
             }

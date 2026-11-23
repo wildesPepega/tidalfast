@@ -123,6 +123,7 @@ fn catalog() -> &'static Catalog {
                     id,
                     title: (*title).into(),
                     cover: Some(cover_id('c', id)),
+                    video_cover: (*kind == "ALBUM").then(|| format!("demo-video-{id}")),
                     artists: vec![artist.clone()],
                     artist: Some(artist.clone()),
                     number_of_tracks: Some(count as u32),

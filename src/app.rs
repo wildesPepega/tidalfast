@@ -273,6 +273,8 @@ pub struct App {
     /// The cover of the full-screen player and how long the next flood of it should take.
     cover3d: crate::cover3d::Cover3d,
     cover_flood_secs: f32,
+    /// When the song last changed (the cover transition runs from then on).
+    track_changed: Instant,
     #[cfg(target_os = "linux")]
     gsr_status: Option<String>,
     /// Cover image picked in the edit dialog: file dialog result and preview.
@@ -318,6 +320,11 @@ pub struct App {
     bg_colors: [Color32; 3],
     /// The interface colours currently shown (eased the same way).
     theme: ui::Theme,
+    /// The last song colours found; kept while the next cover is still loading, so the colours
+    /// do not flash to the defaults and back at every song change.
+    last_palette: Option<[Color32; 3]>,
+    /// The cover shown in the player bar: stays until the new one is loaded.
+    bar_cover: Option<String>,
     /// Backdrop currently shown, the one fading out, and the fade progress.
     wall_url: Option<String>,
     wall_prev: Option<String>,
@@ -431,6 +438,7 @@ impl App {
             overlay: crate::overlay::Overlay::new(),
             cover3d: Default::default(),
             cover_flood_secs: 1.4,
+            track_changed: Instant::now(),
             #[cfg(target_os = "linux")]
             gsr_status: None,
             updater: Updater::new(cc.egui_ctx.clone()),
@@ -454,6 +462,8 @@ impl App {
             blur_tex: HashMap::new(),
             bg_colors: ui::DEFAULT_PALETTE,
             theme: ui::Theme::default(),
+            last_palette: None,
+            bar_cover: None,
             wall_url: None,
             wall_prev: None,
             wall_t: 1.0,
@@ -766,6 +776,7 @@ impl App {
                     duration,
                     quality,
                     auto,
+                    fade,
                 } => {
                     // a start the user has already skipped past is stale
                     if auto && self.loading.is_some() || !auto && self.loading != Some(track.id) {
@@ -790,11 +801,8 @@ impl App {
                         self.discord_track(&track, quality.clone());
                     }
                     // the cover of the full-screen player floods over as long as the crossfade
-                    self.cover_flood_secs = if auto && self.cfg.transition == TransitionMode::Crossfade {
-                        self.cfg.crossfade_secs.clamp(1.0, 12.0)
-                    } else {
-                        1.4
-                    };
+                    self.cover_flood_secs = if auto && fade > 0.2 { fade.clamp(0.5, 20.0) } else { 1.4 };
+                    self.track_changed = Instant::now();
                     self.current = Some(*track);
                     self.duration = duration;
                     self.position = 0.0;
@@ -1394,6 +1402,13 @@ impl App {
     fn prefetch_covers(&mut self) {
         let mut urls: Vec<String> = Vec::new();
         urls.extend(self.current.as_ref().and_then(|t| t.cover_url(COVER_NOW)));
+        // the next song's covers too: its transition starts the moment it does
+        if let Some(next) = self.peek_next().and_then(|(i, _)| self.queue.get(i)) {
+            urls.extend(next.cover_url(COVER_NOW));
+            if self.now_open {
+                urls.extend(next.cover_url(750));
+            }
+        }
         urls.extend(self.playlists.iter().filter_map(|p| p.cover_url()));
         for (_, list) in &self.home {
             urls.extend(list.iter().filter_map(|p| p.cover_url()));
@@ -1689,8 +1704,8 @@ impl App {
         // Two equal rounded squares at the ends of the bar. The home button is only
         // up here in the full-screen player; otherwise it lives in the library.
         let size = egui::vec2(HEADER_HEIGHT, HEADER_HEIGHT);
-        let home_tile = egui::Rect::from_min_size(rect.left_top(), size);
-        let settings_tile = egui::Rect::from_min_size(egui::pos2(rect.right() - size.x, rect.top()), size);
+        let home_tile = egui::Rect::from_center_size(egui::pos2(rect.left() + size.x / 2.0, rect.center().y), size);
+        let settings_tile = egui::Rect::from_center_size(egui::pos2(rect.right() - size.x / 2.0, rect.center().y), size);
 
         if self.user.is_some() && full {
             let home = ui.interact(home_tile, egui::Id::new("home_button"), egui::Sense::click());
@@ -1706,8 +1721,13 @@ impl App {
         }
 
         // centre: search
-        let width = (rect.width() * 0.42).clamp(300.0, 520.0);
-        let center = egui::Rect::from_center_size(rect.center(), egui::vec2(width, rect.height()));
+        let width = (ui.ctx().screen_rect().width() * 0.42).clamp(300.0, 520.0).min((rect.width() - 2.0 * (HEADER_HEIGHT + 24.0)).max(160.0));
+        // centred on the window when there is room, else squeezed between the buttons
+        let window_mid = ui.ctx().screen_rect().center().x;
+        let half = width / 2.0;
+        let mid_x = window_mid.clamp(rect.left() + half + 12.0, (rect.right() - HEADER_HEIGHT - 12.0 - half).max(rect.left() + half + 12.0));
+        let search_center = egui::pos2(mid_x, rect.center().y);
+        let center = egui::Rect::from_center_size(search_center, egui::vec2(width, rect.height()));
         let mut mid = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(center)
@@ -1716,7 +1736,7 @@ impl App {
         // One capsule drawn by hand: egui's own frame is switched off, so the
         // field never shows a second outline when it gets focus.
         let search_id = egui::Id::new("search_field");
-        let field = egui::Rect::from_center_size(rect.center(), egui::vec2(width, HEADER_HEIGHT));
+        let field = egui::Rect::from_center_size(search_center, egui::vec2(width, HEADER_HEIGHT));
         let focused = mid.ctx().memory(|m| m.has_focus(search_id));
         let hovered = mid.rect_contains_pointer(field);
         let border = if focused {
@@ -1881,10 +1901,7 @@ impl App {
         if home_row(ui, at_home, t) {
             self.go_home();
         }
-        ui.add_space(2.0);
-        let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-        ui.painter().line_segment([line.left_center() + egui::vec2(6.0, 0.0), line.right_center() - egui::vec2(6.0, 0.0)], egui::Stroke::new(1.0_f32, ui::LINE));
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         // One row of round buttons: the chevron always sits in the middle of the
         // collapsed width (under the home button); "New playlist" and the title
@@ -2030,8 +2047,14 @@ impl App {
             .map(|_| left.interact(left_rect, egui::Id::new("now_playing"), egui::Sense::click()));
         {
             let ui = &mut left;
+            // the old cover stays until the new one is loaded: no empty square in between
             let cover_url = current.as_ref().and_then(|t| t.cover_url(COVER_NOW));
-            let cover_resp = cover(ui, &self.textures, cover_url.as_deref(), 56.0);
+            match &cover_url {
+                Some(u) if self.textures.contains_key(u) => self.bar_cover = Some(u.clone()),
+                None => self.bar_cover = None,
+                _ => {}
+            }
+            let cover_resp = cover(ui, &self.textures, self.bar_cover.as_deref(), 56.0);
             cover_rect = cover_resp.rect;
             if current.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| cover_rect.contains(p)) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -3344,12 +3367,24 @@ impl App {
             Some(u) if self.textures.contains_key(u) => Some(u.clone()),
             _ => track.cover_url(COVER_NOW),
         };
-        let tex = url.as_ref().and_then(|u| self.textures.get(u)).map(|t| t.id());
+        let best = big.as_ref().and_then(|u| self.textures.get(u)).map(|t| t.id());
+        let small = track.cover_url(COVER_NOW).and_then(|u| self.textures.get(&u)).map(|t| t.id());
+        let age = self.track_changed.elapsed().as_secs_f32();
         let textures = &self.textures;
-        self.cover3d.show(ui, cover_rect, track.id, tex, self.cover_flood_secs, |ui, rect| {
-            ui.painter().rect_filled(rect.translate(egui::vec2(0.0, 10.0)).expand(2.0), 16.0, Color32::from_black_alpha(90));
-            paint_cover_r(ui, textures, url.as_deref(), rect, 14.0);
-        });
+        self.cover3d.show(
+            ui,
+            cover_rect,
+            track.id,
+            best,
+            small,
+            age,
+            self.cover_flood_secs,
+            self.cfg.cover_effect,
+            |ui, rect| {
+                ui.painter().rect_filled(rect.translate(egui::vec2(0.0, 10.0)).expand(2.0), 16.0, Color32::from_black_alpha(90));
+                paint_cover_r(ui, textures, url.as_deref(), rect, 14.0);
+            },
+        );
 
         let text_rect = egui::Rect::from_min_size(
             egui::pos2(cover_rect.left(), cover_rect.bottom() + 16.0),
@@ -3771,6 +3806,27 @@ impl App {
                     RichText::new("The blurred cover and its colours behind the whole app. Off: a calm, fixed backdrop.")
                         .color(TEXT_DIM),
                 );
+
+                ui.add_space(18.0);
+                settings_label(ui, "Cover transition");
+                ui.label(
+                    RichText::new(
+                        "How the next cover takes over in the full-screen player when the song changes. With a crossfade \
+                         it takes as long as the crossfade.",
+                    )
+                    .size(12.5)
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for effect in crate::cover3d::CoverEffect::ALL {
+                        let label = effect.label();
+                        if pill(ui, label, self.cfg.cover_effect == effect, 28.0 + label.chars().count() as f32 * 8.0).clicked() {
+                            self.cfg.cover_effect = effect;
+                            self.touch();
+                        }
+                    }
+                });
             }
             SettingsTab::Discord => {
                 ui.heading("Discord");
@@ -4281,7 +4337,15 @@ impl eframe::App for App {
 
         // wallpaper: blurred cover + the palette of the current song
         let cover_url = self.current.as_ref().and_then(|t| t.cover_url(COVER_NOW));
-        let palette = cover_url.as_ref().and_then(|u| self.palettes.get(u)).copied();
+        let mut palette = cover_url.as_ref().and_then(|u| self.palettes.get(u)).copied();
+        if palette.is_some() {
+            self.last_palette = palette;
+        } else if cover_url.is_some() {
+            // the cover is still on its way: keep the colours of the song before
+            palette = self.last_palette;
+        } else {
+            self.last_palette = None;
+        }
         let target = if self.cfg.cover_backdrop { palette.unwrap_or(ui::DEFAULT_PALETTE) } else { ui::DEFAULT_PALETTE };
         let target_theme = match palette {
             Some(p) if self.cfg.theme_from_cover => ui::theme_for(p),
@@ -4351,9 +4415,9 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 let g = ui::GAP;
                 let screen = ui.max_rect();
-                let header = egui::Rect::from_min_max(
+                let mut header = egui::Rect::from_min_max(
                     screen.min + egui::vec2(g, g),
-                    egui::pos2(screen.right() - g, screen.top() + g + HEADER_HEIGHT),
+                    egui::pos2(screen.right() - g, screen.top() + g + HEADER_BAND),
                 );
                 let player = egui::Rect::from_min_max(
                     egui::pos2(screen.left() + g, screen.bottom() - g - PLAYER_HEIGHT),
@@ -4365,12 +4429,10 @@ impl eframe::App for App {
                     egui::pos2(screen.right() - g, bottom),
                 );
 
-                section(ui, "header", header, None, egui::Vec2::ZERO, |ui| self.header(ui, full));
-                if show_player {
-                    section(ui, "player", player, Some(ui::panel()), egui::vec2(18.0, 10.0), |ui| {
-                        self.player_bar(ui)
-                    });
-                }
+                // The library reaches up to the top of the window: its home button sits where
+                // the header's left end is in the full-screen player, and the header (search,
+                // settings) uses the space to its right.
+                let mut library = None;
                 if logged_in && !full {
                     let t = ui.ctx().animate_bool_with_time_and_easing(
                         egui::Id::new("library_open"),
@@ -4380,9 +4442,20 @@ impl eframe::App for App {
                     );
                     self.sidebar_t = t;
                     let width = LIBRARY_COLLAPSED + (LIBRARY_EXPANDED - LIBRARY_COLLAPSED) * t;
-                    let side = egui::Rect::from_min_size(body.min, egui::vec2(width, body.height()));
-                    section(ui, "library", side, Some(ui::panel()), egui::vec2(8.0, 12.0), |ui| self.library(ui));
+                    let side = egui::Rect::from_min_max(header.min, egui::pos2(header.left() + width, bottom));
                     body.min.x = side.right() + g;
+                    header.min.x = side.right() + g;
+                    library = Some(side);
+                }
+
+                section(ui, "header", header, None, egui::Vec2::ZERO, |ui| self.header(ui, full));
+                if show_player {
+                    section(ui, "player", player, Some(ui::panel()), egui::vec2(18.0, 10.0), |ui| {
+                        self.player_bar(ui)
+                    });
+                }
+                if let Some(side) = library {
+                    section(ui, "library", side, Some(ui::panel()), egui::vec2(8.0, 6.0), |ui| self.library(ui));
                 }
                 if logged_in && self.queue_open && !full {
                     let queue = egui::Rect::from_min_max(egui::pos2(body.right() - QUEUE_WIDTH, body.top()), body.max);
@@ -4442,6 +4515,9 @@ impl eframe::App for App {
 const PLAYER_HEIGHT: f32 = 88.0;
 /// Height of the search capsule and the round header buttons.
 const HEADER_HEIGHT: f32 = 44.0;
+/// The header row: the buttons and the search capsule sit in the middle of it, and the
+/// library's home button below the same line.
+const HEADER_BAND: f32 = 56.0;
 /// Library width with covers only, and with names.
 const LIBRARY_COLLAPSED: f32 = 72.0;
 const LIBRARY_EXPANDED: f32 = 236.0;
@@ -5271,31 +5347,24 @@ fn top_tile(
     ui::paint_icon(painter, tile.center(), icon, size, color, family);
 }
 
-/// The home entry at the top of the library: a tile like the covers below it, with its name when open.
+/// The home entry at the top of the library: the same square tile as the header's home button
+/// in the full-screen player, with its name next to it when the library is open.
 fn home_row(ui: &mut egui::Ui, active: bool, reveal: f32) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 58.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), HEADER_HEIGHT), egui::Sense::click());
     pointer_on_hover(&resp);
     let resp = if reveal < 0.5 { resp.on_hover_text("Home") } else { resp };
+    let tile_x = ((LIBRARY_COLLAPSED - 16.0 - HEADER_HEIGHT) * 0.5).floor();
+    let tile = egui::Rect::from_min_size(rect.min + egui::vec2(tile_x, 0.0), egui::vec2(HEADER_HEIGHT, HEADER_HEIGHT));
     let hovered = ui.rect_contains_pointer(rect);
-    if active {
-        ui.painter().rect_filled(rect, 10.0, CARD_HOVER);
-    } else if hovered {
-        ui.painter().rect_filled(rect, 10.0, CARD);
-    }
-    let art_x = ((LIBRARY_COLLAPSED - 16.0 - 46.0) * 0.5).floor();
-    let art = egui::Rect::from_min_size(rect.min + egui::vec2(art_x, 6.0), egui::vec2(46.0, 46.0));
-    let fill = if active { ui::with_alpha(accent(), 46) } else { CARD_HOVER };
-    ui.painter().rect_filled(art, 8.0, fill);
-    ui.painter().rect_stroke(art, 8.0, egui::Stroke::new(1.0_f32, if active { ui::with_alpha(accent(), 140) } else { ui::EDGE }), egui::StrokeKind::Inside);
     let (color, family) = if active { (accent(), ui::fill_family()) } else { (ui::TEXT, egui::FontFamily::Proportional) };
-    ui::paint_icon(ui.painter(), art.center(), icons::HOUSE, 24.0, color, family);
+    top_tile(ui, tile, hovered, active, icons::HOUSE, 21.0, color, family);
     if reveal > 0.05 {
         let fade = ui::with_alpha(if active { accent() } else { ui::TEXT }, (reveal.clamp(0.0, 1.0) * 255.0) as u8);
         ui.painter().text(
-            egui::pos2(art.right() + 10.0, rect.center().y),
+            egui::pos2(tile.right() + 12.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             "Home",
-            egui::FontId::proportional(15.0),
+            egui::FontId::proportional(15.5),
             fade,
         );
     }
@@ -5563,6 +5632,9 @@ mod debug_shot {
                     self.now_quality = "HI_RES_LOSSLESS".into();
                 }
             }
+            if let Ok(n) = std::env::var("TIDALFAST_SHOT_EFFECT").unwrap_or_default().parse::<usize>() {
+                self.cfg.cover_effect = crate::cover3d::CoverEffect::ALL[n % crate::cover3d::CoverEffect::ALL.len()];
+            }
             if let Some((x, y)) = self.shot.mouse {
                 self.cover3d.debug_pointer = Some(egui::vec2(x, y));
             }
@@ -5576,6 +5648,7 @@ mod debug_shot {
                     self.position_at = Instant::now();
                     self.current = Some(track);
                     self.cover_flood_secs = 3.0;
+                    self.track_changed = Instant::now();
                 }
             }
             if crate::demo::enabled() && self.playing {

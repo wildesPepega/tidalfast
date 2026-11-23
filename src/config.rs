@@ -33,6 +33,8 @@ pub struct Settings {
     pub theme_from_cover: bool,
     /// The blurred cover and its colours behind the app.
     pub cover_backdrop: bool,
+    /// How the next cover takes over in the full-screen player.
+    pub cover_effect: crate::cover3d::CoverEffect,
     /// Serve the now-playing overlay page on localhost, and the port for it.
     pub overlay: bool,
     pub overlay_port: u16,
@@ -89,6 +91,7 @@ impl Default for Settings {
             link_handler: true,
             theme_from_cover: true,
             cover_backdrop: true,
+            cover_effect: Default::default(),
             overlay: false,
             overlay_port: 7788,
             overlay_lan: false,

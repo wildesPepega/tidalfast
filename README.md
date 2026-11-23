@@ -20,14 +20,6 @@ No Electron, no web view, just a small binary.</p>
   <a href="docs/screenshots/overlay.jpg"><img src="docs/screenshots/overlay.jpg" width="49%" alt="Now-playing overlay in a recording"></a>
 </p>
 
-The visualizer (its own window, also in fullscreen) reacts to bass, mids, treble and the beat:
-
-<p align="center">
-  <img src="docs/screenshots/visualizer-spiral.jpg" width="32%" alt="Visualizer: spiral">
-  <img src="docs/screenshots/visualizer-bloom.jpg" width="32%" alt="Visualizer: bloom">
-  <img src="docs/screenshots/visualizer-aurora.jpg" width="32%" alt="Visualizer: aurora">
-</p>
-
 <sub>Every artist, album, playlist and cover in these pictures is made up (the app's demo mode, available in debug builds with `TIDALFAST_DEMO=1`); no account or TIDAL content is shown.</sub>
 
 ## Features
@@ -47,7 +39,6 @@ The visualizer (its own window, also in fullscreen) reacts to bass, mids, treble
 - **Media keys and desktop media controls:** play/pause/next/previous/seek from your keyboard and from the media widgets of your desktop (MPRIS on Linux: KDE, GNOME, Waybar's `mpris` module, `playerctl`; System Media Transport Controls on Windows). Shows title, artist and cover.
 - **Tray icon:** StatusNotifierItem on Linux (KDE, Waybar, XFCE, … and GNOME with the AppIndicator extension), notification-area icon on Windows. Left click shows/hides the window, the menu has play/pause, next, previous and quit. Optionally keeps running in the tray when you close the window. Media keys and tray are configured in *Settings → System*.
 - **Updates:** checks GitHub for new releases (at startup and every few hours) and can download, verify (SHA-256) and install them itself, for the Linux binary, the AppImage and Windows; *Settings → System → Updates* has a switch for the check and for automatic installation.
-- **Visualizer:** a MilkDrop-style, music-reactive picture written in Rust (OpenGL) in a window of its own, with fullscreen. It reacts to bass, mids, treble and the beat, has a dozen built-in presets plus endless random ones that melt into each other, and shows the playing song. Open it with the waveform button in the player bar or the `V` key; presets, quality and beat sensitivity are in *Settings → Visualizer*.
 - **Now-playing overlay:** an optional local web page (cover, title, artist, progress, bottom left, transparent) for recordings and streams, served on `127.0.0.1` and used as a browser source; switch it on in *Settings → Overlay*. There is also a read-only JSON API on the same local server (`/api/now` with the current and next track, cover, progress; `/api/cover` for the picture), which you can switch on and off separately. On Linux, a built-in plugin for [GPU Screen Recorder](https://git.dec05eba.com/gpu-screen-recorder/about/) draws the same card (with the next track) into the bottom right of your recordings and replays, only while music plays; install it with one click in *Settings → Overlay* (source in `gsr-plugin/`).
 - **Output device selection** (PipeWire/PulseAudio sinks on Linux, WASAPI devices on Windows).
 - **Single instance:** starting tidalfast again focuses the running window.
@@ -105,7 +96,6 @@ On first start tidalfast shows a code and opens TIDAL's device-login page in you
 | `src/discord.rs` | Discord Rich Presence worker |
 | `src/import.rs`, `src/link.rs` | Spotify import and Spotify/TIDAL link parsing |
 | `src/demo.rs` | Debug builds only: the made-up music behind the screenshots |
-| `src/viz/` | The visualizer: audio analysis and beat detection, presets, geometry and the OpenGL renderer |
 | `gsr-plugin/` | C plugin for GPU Screen Recorder that draws the overlay card into recordings |
 | `src/overlay.rs`, `src/card.rs` | The optional now-playing overlay: a small localhost web server with a transparent page and a JSON endpoint |
 | `src/system.rs` | Media keys / MPRIS / Windows media controls and the tray icon |

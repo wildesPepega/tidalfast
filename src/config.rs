@@ -29,11 +29,6 @@ pub struct Settings {
     pub tray: bool,
     /// Handle `spotify:` and `tidal:` links (browsers offer to open them in tidalfast).
     pub link_handler: bool,
-    /// Visualizer: seconds per preset, render quality (0‥2), hard cuts on the beat, beat sensitivity.
-    pub viz_seconds: u32,
-    pub viz_quality: u8,
-    pub viz_beat_cuts: bool,
-    pub viz_sensitivity: f32,
     /// Serve the now-playing overlay page on localhost, and the port for it.
     pub overlay: bool,
     pub overlay_port: u16,
@@ -88,10 +83,6 @@ impl Default for Settings {
             media_keys: true,
             tray: false,
             link_handler: true,
-            viz_seconds: 15,
-            viz_quality: 1,
-            viz_beat_cuts: false,
-            viz_sensitivity: 1.0,
             overlay: false,
             overlay_port: 7788,
             overlay_lan: false,

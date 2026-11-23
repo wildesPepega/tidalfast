@@ -378,7 +378,18 @@ pub async fn worker(mut rx: UnboundedReceiver<Cmd>, ev: Sender<Ev>) {
 // ----------------------------------------------------------------- cover art
 
 fn hsv(h: f32, s: f32, v: f32) -> [f32; 3] {
-    crate::viz::preset::hsv(h, s, v)
+    let h = h.rem_euclid(1.0) * 6.0;
+    let i = h.floor();
+    let f = h - i;
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    match i as i32 {
+        0 => [v, t, p],
+        1 => [q, v, p],
+        2 => [p, v, t],
+        3 => [p, q, v],
+        4 => [t, p, v],
+        _ => [v, p, q],
+    }
 }
 
 fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {

@@ -12,7 +12,6 @@ use crate::audio::{Audio, AudioCmd, AudioEv, OutputDevice};
 use crate::config::{RepeatMode, Settings};
 use crate::system::{NowPlaying, SysEvent, System};
 use crate::update::{self, Release, UpdateEv, Updater};
-use crate::viz::{self, Viz};
 use crate::transition::TransitionMode;
 use crate::discord::{Discord, DiscordCmd};
 use crate::eq::EqShared;
@@ -86,7 +85,6 @@ enum SettingsTab {
     Playback,
     Equalizer,
     Discord,
-    Visualizer,
     Overlay,
     System,
     Account,
@@ -264,7 +262,6 @@ pub struct App {
     preload: Option<(usize, Option<usize>, u64)>,
     updater: Updater,
     update: UpdateState,
-    visualizer: Viz,
     overlay: crate::overlay::Overlay,
     #[cfg(target_os = "linux")]
     gsr_status: Option<String>,
@@ -416,7 +413,6 @@ impl App {
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
             lib_click: None,
-            visualizer: Viz::new(eq_shared.clone()),
             overlay: crate::overlay::Overlay::new(),
             #[cfg(target_os = "linux")]
             gsr_status: None,
@@ -1208,9 +1204,6 @@ impl App {
         if pressed(Modifiers::NONE, Key::M) {
             self.toggle_mute();
         }
-        if pressed(Modifiers::NONE, Key::V) {
-            self.visualizer.toggle();
-        }
     }
 
     fn shuffle_changed(&mut self) {
@@ -1512,33 +1505,6 @@ impl App {
             next: self.peek_next().and_then(|(i, _)| self.queue.get(i)).map(overlay_brief),
         });
         self.overlay.set(song, self.playing && !self.finished, self.position);
-    }
-
-    /// Keep the visualizer's window going and carry out what its keys ask for.
-    fn handle_visualizer(&mut self, ctx: &egui::Context) {
-        self.visualizer.set_options(viz::Options {
-            seconds: self.cfg.viz_seconds.clamp(5, 120),
-            quality: self.cfg.viz_quality.min(2),
-            beat_cuts: self.cfg.viz_beat_cuts,
-            sensitivity: self.cfg.viz_sensitivity.clamp(0.3, 3.0),
-        });
-        #[cfg(debug_assertions)]
-        if std::env::var_os("TIDALFAST_VIZ_DEMO").is_some() && !self.visualizer.is_open() && self.visualizer.demo_unopened() {
-            self.visualizer.open();
-        }
-        if let Some(track) = &self.current {
-            let artist = track.artist_name();
-            let text = if artist.is_empty() { track.title.clone() } else { format!("{} — {}", track.title, artist) };
-            self.visualizer.set_song(text, track.id);
-        }
-        for action in self.visualizer.take_actions() {
-            match action {
-                viz::Action::TogglePlay => self.toggle_play(),
-                viz::Action::NextTrack => self.advance(false),
-                viz::Action::PreviousTrack => self.previous(),
-            }
-        }
-        self.visualizer.show(ctx);
     }
 
     fn start_update_install(&mut self) {
@@ -1985,7 +1951,6 @@ impl App {
         let mut want_like: Option<(u64, bool)> = None;
         let mut want_artist: Option<Artist> = None;
         let want_queue: bool;
-        let want_viz: bool;
         let want_mute: bool;
         let mut want_now = false;
         let cover_rect: egui::Rect;
@@ -2126,9 +2091,6 @@ impl App {
             let ui = &mut right;
             ui.spacing_mut().item_spacing.x = 6.0;
             want_queue = icon_button(ui, Icon::Queue, 30.0, self.queue_open).on_hover_text("Queue").clicked();
-            want_viz = icon_button(ui, Icon::Visualizer, 30.0, self.visualizer.is_open())
-                .on_hover_text("Visualizer (V)")
-                .clicked();
             ui.add_space(4.0);
             let mut vol = self.cfg.volume;
             let slider_w = (ui.available_width() - 80.0).clamp(50.0, 120.0);
@@ -2184,9 +2146,6 @@ impl App {
         }
         if let Some((id, liked)) = want_like {
             self.set_liked(id, liked);
-        }
-        if want_viz {
-            self.visualizer.toggle();
         }
         if want_queue {
             self.queue_open = !self.queue_open;
@@ -3630,7 +3589,6 @@ impl App {
                                         (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback"),
                                         (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer"),
                                         (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord"),
-                                        (SettingsTab::Visualizer, icons::WAVEFORM, "Visualizer"),
                                         (SettingsTab::Overlay, icons::SUBTITLES, "Overlay"),
                                         (SettingsTab::System, icons::DESKTOP, "System"),
                                         (SettingsTab::Account, icons::USER_CIRCLE, "Account"),
@@ -3695,7 +3653,6 @@ impl App {
                         (format!("{r} / {l}"), "Seek 10 seconds forward / back"),
                         (format!("{u} / {d}"), "Volume up / down"),
                         ("M".to_string(), "Mute"),
-                        ("V".to_string(), "Visualizer"),
                         ("Ctrl+F / /".to_string(), "Search"),
                         ("Esc".to_string(), "Close full-screen player"),
                     ] {
@@ -3756,60 +3713,6 @@ impl App {
                 }
             }
             SettingsTab::Equalizer => self.equalizer_view(ui),
-            SettingsTab::Visualizer => {
-                ui.heading("Visualizer");
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(
-                        "A MilkDrop-style picture that moves with the music and its beat, in a window of its own \
-                         (press F for fullscreen, ? for the keys).",
-                    )
-                    .color(TEXT_DIM),
-                );
-                ui.add_space(8.0);
-                let open = self.visualizer.is_open();
-                if action_button(ui, icons::WAVEFORM, if open { "Close visualizer" } else { "Open visualizer" }, !open).clicked() {
-                    self.visualizer.toggle();
-                }
-
-                ui.add_space(14.0);
-                settings_label(ui, "Change the preset every");
-                ui.spacing_mut().slider_width = 300.0;
-                let mut seconds = self.cfg.viz_seconds;
-                if ui.add(egui::Slider::new(&mut seconds, 5..=90).suffix(" s")).changed() {
-                    self.cfg.viz_seconds = seconds;
-                    self.touch();
-                }
-                let mut beat_cuts = self.cfg.viz_beat_cuts;
-                if ui.checkbox(&mut beat_cuts, "Switch with a hard cut on the beat").changed() {
-                    self.cfg.viz_beat_cuts = beat_cuts;
-                    self.touch();
-                }
-
-                ui.add_space(10.0);
-                settings_label(ui, "Beat sensitivity");
-                let mut sensitivity = self.cfg.viz_sensitivity;
-                if ui.add(egui::Slider::new(&mut sensitivity, 0.5..=2.0).fixed_decimals(1)).changed() {
-                    self.cfg.viz_sensitivity = sensitivity;
-                    self.touch();
-                }
-
-                ui.add_space(10.0);
-                settings_label(ui, "Picture quality");
-                ui.horizontal(|ui| {
-                    for (quality, label) in [(0u8, "540p"), (1, "720p"), (2, "1080p")] {
-                        if pill(ui, label, self.cfg.viz_quality == quality, 72.0).clicked() {
-                            self.cfg.viz_quality = quality;
-                            self.touch();
-                        }
-                    }
-                });
-                ui.label(
-                    RichText::new("The picture is drawn at most this tall and scaled to the window. Lower is lighter on the graphics card.")
-                        .size(12.5)
-                        .color(TEXT_DIM),
-                );
-            }
             SettingsTab::Discord => {
                 ui.heading("Discord");
                 ui.add_space(8.0);
@@ -4283,7 +4186,6 @@ impl eframe::App for App {
         self.handle_audio_events();
         self.handle_system(ctx);
         self.handle_updates();
-        self.handle_visualizer(ctx);
         self.handle_overlay();
         self.refresh_preload();
         while let Ok(text) = self.link_rx.try_recv() {
@@ -5477,7 +5379,6 @@ mod debug_shot {
                 self.settings_tab = match std::env::var("TIDALFAST_SHOT_TAB").as_deref() {
                     Ok("equalizer") => super::SettingsTab::Equalizer,
                     Ok("discord") => super::SettingsTab::Discord,
-                    Ok("visualizer") => super::SettingsTab::Visualizer,
                     Ok("overlay") => super::SettingsTab::Overlay,
                     Ok("system") => super::SettingsTab::System,
                     _ => self.settings_tab,

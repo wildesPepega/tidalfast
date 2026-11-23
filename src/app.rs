@@ -4711,27 +4711,74 @@ impl App {
 
     // ------------------------------------------------------------------ shell
 
+    /// The small notification at the bottom: a glass pill in the theme, with an icon for what
+    /// kind of message it is, sliding up, fading, and a thin line that counts down its time.
     fn status_toast(&mut self, ctx: &egui::Context) {
+        const LIFE: f32 = 4.0;
         let Some((message, at)) = &self.toast else {
             return;
         };
-        let age = at.elapsed();
-        if age > Duration::from_secs(4) {
+        let age = at.elapsed().as_secs_f32();
+        if age > LIFE {
             self.toast = None;
             return;
         }
-        let alpha = (1.0 - (age.as_secs_f32() - 3.0).max(0.0)).clamp(0.0, 1.0);
+        let smooth = |x: f32| {
+            let t = x.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let appear = smooth(age / 0.28);
+        let alpha = appear * (1.0 - smooth((age - (LIFE - 0.45)) / 0.45));
+        let (icon, tone) = toast_kind(message);
+        let fade = |c: Color32, a: f32| ui::with_alpha(c, (a * alpha).clamp(0.0, 255.0) as u8);
         egui::Area::new(egui::Id::new("toast"))
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -(PLAYER_HEIGHT + ui::GAP * 3.0)))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -(PLAYER_HEIGHT + ui::GAP * 3.0) + (1.0 - appear) * 14.0))
             .interactable(false)
+            .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(Color32::from_black_alpha((220.0 * alpha) as u8))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(message).color(Color32::from_gray(230)));
-                    });
+                let galley = ui.painter().layout(
+                    message.clone(),
+                    egui::FontId::proportional(14.0),
+                    fade(ui::TEXT, 255.0),
+                    (ctx.screen_rect().width() - 140.0).clamp(160.0, 440.0),
+                );
+                let size = egui::vec2(galley.size().x + 74.0, galley.size().y.max(20.0) + 24.0);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let p = ui.painter();
+                let round = egui::CornerRadius::same(18);
+                // a soft light round the pill, the glass itself, and its edge
+                p.rect_filled(rect.expand(3.0), egui::CornerRadius::same(21), fade(tone, 20.0));
+                p.rect_filled(rect, round, fade(ui::lerp_color(ui::panel_solid(), tone, 0.07), 244.0));
+                p.rect_stroke(rect, round, egui::Stroke::new(1.0_f32, fade(tone, 95.0)), egui::StrokeKind::Inside);
+                // the badge with the icon
+                let badge = egui::pos2(rect.left() + 28.0, rect.center().y);
+                p.circle_filled(badge, 13.5, fade(tone, 46.0));
+                ui::paint_icon(p, badge, icon, 16.0, fade(tone, 255.0), egui::FontFamily::Proportional);
+                p.galley(egui::pos2(rect.left() + 52.0, rect.center().y - galley.size().y / 2.0 - 1.0), galley, fade(ui::TEXT, 255.0));
+                // the time left
+                let left = (1.0 - age / LIFE).clamp(0.0, 1.0);
+                let line = egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + 20.0, rect.bottom() - 5.0),
+                    egui::vec2((rect.width() - 40.0) * left, 2.0),
+                );
+                p.rect_filled(line, 1.0, fade(tone, 110.0));
             });
-        ctx.request_repaint_after(Duration::from_millis(120));
+        ctx.request_repaint();
+    }
+}
+
+/// Icon and colour of a notification, judged by what it says.
+fn toast_kind(message: &str) -> (&'static str, Color32) {
+    let m = message.to_lowercase();
+    if ["can't", "cannot", "could not", "couldn't", "failed", "error", "please sign in", "not available", "unable"]
+        .iter()
+        .any(|w| m.contains(w))
+    {
+        (icons::WARNING_CIRCLE, ui::DANGER)
+    } else if m.ends_with('…') || m.ends_with("...") || m.starts_with("saving") || m.starts_with("removing") {
+        (icons::INFO, accent())
+    } else {
+        (icons::CHECK_CIRCLE, accent())
     }
 }
 
@@ -6187,6 +6234,12 @@ mod debug_shot {
                     page: "https://example.com".into(),
                     asset: None,
                 });
+            }
+            if let Ok(text) = std::env::var("TIDALFAST_SHOT_TOAST") {
+                static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if started.elapsed() > Duration::from_secs(2) && !SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    self.toast = Some((text, Instant::now()));
+                }
             }
             if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
                 self.cfg.fluid_backdrop = true;

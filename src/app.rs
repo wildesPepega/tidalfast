@@ -3887,7 +3887,7 @@ impl App {
                         (format!("{u} / {d}"), "Volume up / down"),
                         ("M".to_string(), "Mute"),
                         ("Ctrl+F / /".to_string(), "Search"),
-                        ("Esc".to_string(), "Close full-screen player"),
+                        ("Esc".to_string(), "Minimize full-screen player"),
                     ] {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;

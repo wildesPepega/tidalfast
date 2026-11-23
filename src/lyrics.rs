@@ -281,7 +281,9 @@ impl View {
                     let idx = line.words.iter().rposition(|w| w.start <= time).unwrap_or(0);
                     let (w, b) = (&line.words[idx], &lay.words[idx]);
                     let fill = (((time - w.start) / (w.end - w.start).max(0.05)).clamp(0.0, 1.0)) as f32;
-                    target = Some((Pos2::new(b.x + b.w * fill, lay.top + b.y + ROW_HEIGHT * 0.5), egui::vec2(34.0 + b.w * 0.35, ROW_HEIGHT * 0.85)));
+                    // it stays on the word (moving only a little along it) and is as wide as the word, so at the
+                    // last word of a line it does not run off to the right
+                    target = Some((Pos2::new(b.x + b.w * (0.40 + 0.20 * fill), lay.top + b.y + ROW_HEIGHT * 0.5 - 3.0), egui::vec2(20.0 + b.w * 0.45, ROW_HEIGHT * 0.8)));
                 }
             }
             let ease = |rate: f32| 1.0 - (-dt * rate).exp();

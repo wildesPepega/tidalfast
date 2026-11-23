@@ -325,6 +325,13 @@ pub struct App {
     viz: [f32; VIZ_BARS],
     /// Smoothed bass level 0‥1 (for the backdrop that breathes).
     bass: f32,
+    /// The five bands, smoothed.
+    bands: [f32; 5],
+    /// The backdrop's own clock: runs faster with the energy of the music.
+    wall_phase: f32,
+    /// When the last beat was, and how hard.
+    beat_at: f64,
+    beat: f32,
     viz_ref: f32,
     avatar_rect: egui::Rect,
     settings_tab: SettingsTab,
@@ -473,6 +480,10 @@ impl App {
             lyrics_view: Default::default(),
             viz: [0.0; VIZ_BARS],
             bass: 0.0,
+            bands: [0.0; 5],
+            wall_phase: 0.0,
+            beat_at: -100.0,
+            beat: 0.0,
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
@@ -3532,6 +3543,7 @@ impl App {
         let textures = &self.textures;
         self.cover3d.reflection = self.cfg.cover_reflection;
         self.cover3d.holo = self.cfg.cover_holo;
+        self.cover3d.pulse = self.bass;
         self.cover3d.show(
             ui,
             cover_rect,
@@ -4767,18 +4779,29 @@ impl eframe::App for App {
             self.viz = [0.9, 0.55, 0.75, 0.4, 0.6];
         }
         {
-            // the bass: quick to rise, slow to fall
+            // the music, band by band: quick to rise, slow to fall
             let dt = ctx.input(|i| i.stable_dt).min(0.1);
-            let target = if self.cfg.audio_reactive && self.playing { self.viz[0].clamp(0.0, 1.0) } else { 0.0 };
-            let rate = if target > self.bass { 18.0 } else { 4.5 };
-            self.bass += (target - self.bass) * (1.0 - (-dt * rate).exp());
-            if self.bass < 0.002 && target == 0.0 {
-                self.bass = 0.0;
+            let now = ctx.input(|i| i.time);
+            let reactive = self.cfg.audio_reactive && self.playing;
+            let before = self.bass;
+            for i in 0..5 {
+                let target = if reactive { self.viz[i].clamp(0.0, 1.0) } else { 0.0 };
+                let rate = if target > self.bands[i] { 20.0 } else { 4.0 };
+                self.bands[i] += (target - self.bands[i]) * (1.0 - (-dt * rate).exp());
+                if self.bands[i] < 0.002 && target == 0.0 {
+                    self.bands[i] = 0.0;
+                }
             }
+            self.bass = self.bands[0];
+            // a beat: the bass jumps up
+            let hit = if reactive { self.viz[0].clamp(0.0, 1.0) } else { 0.0 };
+            if reactive && hit - before > 0.20 && now - self.beat_at > 0.30 {
+                self.beat_at = now;
+                self.beat = hit.clamp(0.5, 1.0);
+            }
+            let energy = self.bands.iter().sum::<f32>() / 5.0;
+            self.wall_phase += dt * (1.0 + 3.0 * energy);
         }
-
-        self.shortcuts(ctx);
-
         // wallpaper: blurred cover + the palette of the current song
         let cover_url = self.current.as_ref().and_then(|t| t.cover_url(COVER_NOW));
         let mut palette = cover_url.as_ref().and_then(|u| self.palettes.get(u)).copied();
@@ -4852,9 +4875,16 @@ impl eframe::App for App {
             if backdrop { tex(&self.wall_url) } else { None },
             if backdrop { tex(&self.wall_prev) } else { None },
             self.wall_t,
-            ui::WallFx { fluid: self.cfg.fluid_backdrop, bass: self.bass, time: now as f32 },
+            ui::WallFx {
+                fluid: self.cfg.fluid_backdrop,
+                bass: self.bass,
+                bands: self.bands,
+                time: self.wall_phase,
+                beat_age: (now - self.beat_at) as f32,
+                beat: self.beat,
+            },
         );
-        if self.cfg.fluid_backdrop || self.bass > 0.0 {
+        if self.cfg.fluid_backdrop || self.bass > 0.0 || (now - self.beat_at) < 1.5 {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
 
@@ -6178,6 +6208,9 @@ mod debug_shot {
             }
             if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
                 self.cfg.fluid_backdrop = true;
+            }
+            if std::env::var_os("TIDALFAST_SHOT_REACTIVE").is_some() {
+                self.cfg.audio_reactive = true;
             }
             if let Some((x, y)) = self.shot.mouse {
                 self.cover3d.debug_pointer = Some(egui::vec2(x, y));

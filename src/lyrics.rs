@@ -273,21 +273,13 @@ impl View {
                 if fill > 0.0 {
                     let clip = Rect::from_min_max(Pos2::new(pos.x - 2.0, pos.y - 4.0), Pos2::new(pos.x + b.w * fill + 1.0, pos.y + ROW_HEIGHT));
                     if self.glow {
-                        // a soft halo round the sung part, strongest while the word is being sung
-                        let halo_clip = clip.expand(7.0).intersect(rect);
-                        let halo = ui::lerp_color(TEXT, ui::accent(), 0.55);
-                        let strength = 0.55 + 0.45 * (fill * (1.0 - fill) * 4.0);
-                        for (radius, alpha) in [(3.0_f32, 0.020_f32), (6.0, 0.012)] {
-                            for k in 0..8 {
-                                let a = k as f32 * std::f32::consts::FRAC_PI_4;
-                                painter.with_clip_rect(halo_clip).text(
-                                    pos + egui::vec2(a.cos(), a.sin()) * radius,
-                                    egui::Align2::LEFT_TOP,
-                                    &w.text,
-                                    font.clone(),
-                                    with_alpha_f(halo, alpha * strength * edge),
-                                );
-                            }
+                        // a soft glow behind the word being sung that stays a moment and fades like a comet's tail
+                        let tail = (-((time - w.end).max(0.0) as f32) * 2.6).exp();
+                        let halo = ui::lerp_color(TEXT, ui::accent(), 0.6);
+                        let sung = b.w * fill;
+                        let centre = Pos2::new(pos.x + sung * 0.5, pos.y + ROW_HEIGHT * 0.5);
+                        if tail > 0.02 {
+                            ui::soft_ellipse(&painter, centre, egui::vec2(sung * 0.5 + 30.0, ROW_HEIGHT * 0.85), with_alpha_f(halo, 0.30 * tail * edge));
                         }
                     }
                     painter.with_clip_rect(clip.intersect(rect)).text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, edge));

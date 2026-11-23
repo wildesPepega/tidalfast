@@ -241,11 +241,13 @@ pub struct Cover3d {
     pub reflection: bool,
     /// A rainbow foil sheen that follows the mouse.
     pub holo: bool,
+    /// 0‥1: the cover swells a little with the bass.
+    pub pulse: f32,
 }
 
 impl Default for Cover3d {
     fn default() -> Self {
-        Self { gpu: Arc::new(Mutex::new(GpuState::Idle)), anim: Anim::default(), tilt: egui::Vec2::ZERO, hover: 0.0, light: egui::vec2(0.3, 0.25), #[cfg(debug_assertions)] debug_pointer: None, reflection: false, holo: false }
+        Self { gpu: Arc::new(Mutex::new(GpuState::Idle)), anim: Anim::default(), tilt: egui::Vec2::ZERO, hover: 0.0, light: egui::vec2(0.3, 0.25), #[cfg(debug_assertions)] debug_pointer: None, reflection: false, holo: false, pulse: 0.0 }
     }
 }
 
@@ -340,6 +342,21 @@ impl Cover3d {
             );
         }
 
+        // light spilling onto the floor under the cover, in the colour of the theme
+        if self.reflection {
+            let lit = (0.55 + 0.45 * self.hover) * blown * flip.cos().abs();
+            if lit > 0.02 {
+                let a = crate::ui::accent();
+                let glow = egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), (70.0 * lit + 50.0 * self.pulse) as u8);
+                crate::ui::soft_ellipse(
+                    &ui.painter().with_clip_rect(ui.clip_rect()),
+                    egui::pos2(rect.center().x, rect.bottom() + rect.height() * 0.07),
+                    egui::vec2(rect.width() * (0.62 + 0.08 * self.pulse), rect.height() * 0.22),
+                    glow,
+                );
+            }
+        }
+
         // the explosion needs room around the cover (but not beyond the panel it sits in)
         let exploding = self.anim.effect == EXPLODE && progress < 1.0;
         let margin = if exploding { 1.0 } else { MARGIN };
@@ -363,7 +380,7 @@ impl Cover3d {
         let params = Params {
             size_px: rect.width() * ppp,
             rot: [self.tilt.y * MAX_TILT, self.tilt.x * MAX_TILT],
-            zoom: 1.0 + 0.025 * self.hover,
+            zoom: 1.0 + 0.025 * self.hover + 0.04 * self.pulse,
             light: [self.light.x, self.light.y],
             glare: 0.18 * self.hover,
             progress,
@@ -716,6 +733,39 @@ void main() {
     if (alpha <= 0.0) { o = vec4(0.0); return; }
 
     float t = clamp(u_progress, 0.0, 1.0);
+    if (u_reflect == 1) {
+        // the floor: the picture a little out of focus (more so the further it is from the plate),
+        // wobbling like water, and fading into a soft tint of the cover's own colour
+        float far = 1.0 - uv.y;
+        vec2 q = uv;
+        q.x += sin(uv.y * 34.0 - u_time * 1.7) * 0.0045 * (0.3 + far * 3.0)
+             + sin(uv.y * 71.0 + u_time * 2.3) * 0.0020 * far * 3.0;
+        float blur = 0.003 + far * 0.050;
+        float e = t >= 1.0 ? 1.0 : ease(t);
+        vec3 acc = vec3(0.0);
+        float wsum = 0.0;
+        for (int i = -2; i <= 2; i++) {
+            for (int j = -2; j <= 2; j++) {
+                vec2 d = vec2(float(i), float(j)) * 0.5 * blur;
+                float wt = exp(-float(i * i + j * j) * 0.25);
+                vec2 sp = clamp(q + d, vec2(0.002), vec2(0.998));
+                acc += mix(from_at(sp), to_at(sp), e) * wt;
+                wsum += wt;
+            }
+        }
+        vec3 rc = acc / wsum;
+        // fades out from the plate downwards, quicker at the sides, with a faint shimmer
+        float fade = pow(smoothstep(0.55, 1.0, uv.y), 1.25) * 0.62;
+        fade *= 0.9 + 0.1 * sin(uv.y * 60.0 - u_time * 2.0);
+        fade *= smoothstep(0.0, 0.10, uv.x) * smoothstep(1.0, 0.90, uv.x);
+        // a slow light streak sliding across the floor
+        float streak = smoothstep(0.16, 0.0, abs(fract(uv.x * 0.8 + far * 0.5 - u_time * 0.07) - 0.5) - 0.05);
+        float lit = streak * 0.30;
+        rc = mix(rc, vec3(dot(rc, vec3(0.3, 0.6, 0.1))), 0.25) * 0.95 + vec3(0.02, 0.025, 0.04) * (1.0 - far);
+        rc += vec3(lit) * (1.0 - far);
+        o = vec4(clamp(rc, 0.0, 1.0) * alpha * fade, alpha * fade);
+        return;
+    }
     vec3 col;
     if (t >= 1.0) {
         col = to_at(uv);
@@ -731,11 +781,6 @@ void main() {
     else if (u_effect == 10) { col = wave(uv, t); }
     else { col = ink(uv, t); }
 
-    if (u_reflect == 1) {
-        float fade = pow(smoothstep(0.74, 1.0, uv.y), 1.5) * 0.34;
-        o = vec4(clamp(col, 0.0, 1.0) * alpha * fade, alpha * fade);
-        return;
-    }
 
     // light that follows the mouse, and a faint edge falloff for depth
     float dl = distance(uv, u_light);

@@ -53,12 +53,14 @@ pub enum CoverEffect {
     Explode,
     /// A glowing wave with ripples sweeps diagonally across (after Radiant Lyrics).
     Wave,
+    /// Ink drops into the old cover and spreads in dark tendrils, the new cover coming up behind.
+    Ink,
     /// A different one every song.
     Random,
 }
 
 impl CoverEffect {
-    pub const ALL: [CoverEffect; 12] = [
+    pub const ALL: [CoverEffect; 13] = [
         CoverEffect::Liquid,
         CoverEffect::Ripple,
         CoverEffect::Dissolve,
@@ -70,6 +72,7 @@ impl CoverEffect {
         CoverEffect::Iris,
         CoverEffect::Explode,
         CoverEffect::Wave,
+        CoverEffect::Ink,
         CoverEffect::Random,
     ];
 
@@ -86,6 +89,7 @@ impl CoverEffect {
             CoverEffect::Iris => "Clock wipe",
             CoverEffect::Explode => "Explode",
             CoverEffect::Wave => "Wave",
+            CoverEffect::Ink => "Ink",
             CoverEffect::Random => "Random",
         }
     }
@@ -104,6 +108,7 @@ impl CoverEffect {
             CoverEffect::Iris,
             CoverEffect::Explode,
             CoverEffect::Wave,
+            CoverEffect::Ink,
         ];
         match self {
             CoverEffect::Random => {
@@ -232,11 +237,15 @@ pub struct Cover3d {
     /// Debug builds: pretend the mouse is here, as a fraction of the cover (screenshots).
     #[cfg(debug_assertions)]
     pub debug_pointer: Option<egui::Vec2>,
+    /// A mirror image below the cover.
+    pub reflection: bool,
+    /// A rainbow foil sheen that follows the mouse.
+    pub holo: bool,
 }
 
 impl Default for Cover3d {
     fn default() -> Self {
-        Self { gpu: Arc::new(Mutex::new(GpuState::Idle)), anim: Anim::default(), tilt: egui::Vec2::ZERO, hover: 0.0, light: egui::vec2(0.3, 0.25), #[cfg(debug_assertions)] debug_pointer: None }
+        Self { gpu: Arc::new(Mutex::new(GpuState::Idle)), anim: Anim::default(), tilt: egui::Vec2::ZERO, hover: 0.0, light: egui::vec2(0.3, 0.25), #[cfg(debug_assertions)] debug_pointer: None, reflection: false, holo: false }
     }
 }
 
@@ -334,7 +343,12 @@ impl Cover3d {
         // the explosion needs room around the cover (but not beyond the panel it sits in)
         let exploding = self.anim.effect == EXPLODE && progress < 1.0;
         let margin = if exploding { 1.0 } else { MARGIN };
-        let outer = rect.expand(rect.width() * margin).intersect(ui.clip_rect());
+        let below = if self.reflection && !exploding { rect.width() * 0.30 } else { 0.0 };
+        let outer = egui::Rect::from_min_max(
+            rect.min - egui::Vec2::splat(rect.width() * margin),
+            rect.max + egui::vec2(rect.width() * margin, rect.width() * margin + below),
+        )
+        .intersect(ui.clip_rect());
         let ppp = ctx.pixels_per_point();
         let offset = rect.center() - outer.center();
         // the whole picture jolts: a tremble while the charge builds, a kick at the blast
@@ -359,6 +373,9 @@ impl Cover3d {
             flip,
             center: [offset.x * ppp, -offset.y * ppp],
             shake,
+            reflect: self.reflection && !exploding,
+            reflecting: false,
+            holo: if self.holo { 1.0 } else { 0.0 },
         };
         let state = self.gpu.clone();
         ui.painter().add(egui::PaintCallback {
@@ -404,6 +421,12 @@ struct Params {
     center: [f32; 2],
     /// A jolt of the whole picture, pixels.
     shake: [f32; 2],
+    /// Draw a reflection below the cover.
+    reflect: bool,
+    /// This pass draws the reflection.
+    reflecting: bool,
+    /// Foil sheen strength.
+    holo: f32,
 }
 
 struct Gpu {
@@ -427,11 +450,14 @@ uniform float u_zoom;
 uniform float u_flip;
 uniform vec2 u_center;
 uniform vec2 u_shake;
+uniform int u_reflect;
 out vec2 uv;
 void main() {
     vec2 c = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
     uv = vec2(c.x, 1.0 - c.y);
     vec3 q = vec3((c - 0.5) * u_size * u_zoom, 0.0);
+    // the reflection: the plate mirrored at its bottom edge, with a small gap
+    if (u_reflect == 1) q.y = -q.y - u_size * u_zoom * 1.04;
     // the flip turns the plate over; the mouse's lean carries over to the back side
     float yaw = u_flip + u_rot.y * cos(u_flip);
     float cy = cos(yaw), sy = sin(yaw), cx = cos(u_rot.x), sx = sin(u_rot.x);
@@ -455,6 +481,8 @@ uniform float u_glare;
 uniform float u_size;
 uniform int u_srgb;
 uniform int u_effect;
+uniform int u_reflect;
+uniform float u_holo;
 
 const float PI = 3.14159265;
 
@@ -616,7 +644,7 @@ vec3 wv_fringe(sampler2D s, vec2 uv, vec2 off) {
 }
 vec3 wave(vec2 uv, float t) {
     // nearly linear, so the wave does not crawl at the end and is gone exactly when the transition is
-    float mixv = mix(t, ease(t), 0.3);
+    float mixv = mix(t, ease(t), 0.08);
     float clock = u_time;
     float jitter = u_origin.x * 37.0 + u_origin.y * 91.0;
     // the colour of the new cover, punched up
@@ -637,7 +665,9 @@ vec3 wave(vec2 uv, float t) {
 
     float w = uv.x * 0.74 + uv.y * 0.26 + sin(uv.y * 7.0 + clock * 1.7) * 0.045
         + (wv_octaves(uv * 3.0 + jitter + vec2(0.0, clock * 0.08)) - 0.47) * 0.16;
-    float gap = w - mix(-0.3, 1.32, mixv);
+    // the wave's middle travels from just before the first corner (w about 0) to just past the
+    // last one (w about 1.13, plus the glow's reach) so that it leaves exactly when the transition ends
+    float gap = w - mix(-0.28, 1.34, mixv);
     float side = smoothstep(-0.01, 0.01, gap);
     float bulge = exp(-abs(gap) * 9.0) * busy;
     float wiggle = sin(gap * 70.0 - clock * 5.0) * exp(-abs(gap) * 7.0) * busy;
@@ -651,6 +681,30 @@ vec3 wave(vec2 uv, float t) {
     shade += shine * 0.3 * hueLight * headroom;
     shade += swell * 0.1 * headroom;
     return shade;
+}
+
+// ---- 11: ink. Drops of ink spread in tendrils; the new cover comes up behind them.
+vec3 ink(vec2 p, float t) {
+    float e = ease(t);
+    vec2 w = p + 0.11 * vec2(fbm(p * 3.0 + u_time * 0.08), fbm(p * 3.0 + 7.3 - u_time * 0.08)) - 0.055;
+    vec2 second = vec2(1.0 - u_origin.x, 1.0 - u_origin.y) * 0.8 + 0.1;
+    float d = min(length(w - u_origin), length(w - second) * 1.2 + 0.18);
+    float tendrils = fbm(w * 7.0 + vec2(0.0, u_time * 0.15));
+    d += (tendrils - 0.5) * 0.26;
+    float r = mix(-0.3, 2.1, e);
+    float f = r - d;
+    float inside = smoothstep(-0.006, 0.006, f);
+    vec3 cNew = to_at(p);
+    vec3 cOld = from_at(p);
+    // the colour of the ink: very dark, with a hint of the new cover
+    vec3 avg = (to_at(vec2(0.25, 0.25)) + to_at(vec2(0.75, 0.25)) + to_at(vec2(0.25, 0.75)) + to_at(vec2(0.75, 0.75))) * 0.25;
+    vec3 pigment = avg * 0.10;
+    float cloud = (0.5 + 0.5 * tendrils) * (1.0 - smoothstep(0.82, 1.0, t));
+    // ahead of the front the old cover darkens a little, behind it the ink thins out
+    float ahead = exp(min(f, 0.0) * 14.0) * 0.30 * cloud;
+    float behind = exp(-max(f, 0.0) * 8.5) * 0.92 * cloud;
+    vec3 col = mix(cOld * (1.0 - ahead) + pigment * ahead, cNew, inside);
+    return mix(col, pigment, behind * inside);
 }
 
 void main() {
@@ -674,11 +728,33 @@ void main() {
     else if (u_effect == 6) { col = pixelate(uv, t); }
     else if (u_effect == 7) { col = glitch(uv, t); }
     else if (u_effect == 8) { col = iris(uv, t); }
-    else { col = wave(uv, t); }
+    else if (u_effect == 10) { col = wave(uv, t); }
+    else { col = ink(uv, t); }
+
+    if (u_reflect == 1) {
+        float fade = pow(smoothstep(0.74, 1.0, uv.y), 1.5) * 0.34;
+        o = vec4(clamp(col, 0.0, 1.0) * alpha * fade, alpha * fade);
+        return;
+    }
 
     // light that follows the mouse, and a faint edge falloff for depth
     float dl = distance(uv, u_light);
     col += vec3(1.0) * u_glare * pow(smoothstep(0.95, 0.0, dl), 2.2);
+    if (u_holo > 0.0) {
+        // a rainbow foil: bands that slide with the light, a fine sparkle, strongest near the mouse
+        float hover = clamp(u_glare / 0.18, 0.0, 1.0);
+        float band = dot(uv - u_light, vec2(0.8, 0.6)) * 3.0 + noise(uv * 5.0) * 0.4;
+        vec3 rainbow = 0.5 + 0.5 * cos(2.0 * PI * (band + vec3(0.0, 0.33, 0.67)));
+        float near = smoothstep(1.05, 0.0, dl);
+        float amount = (0.03 + 0.17 * hover) * near;
+        col += rainbow * amount;
+        // round twinkles in a grid: few of them, each flaring up and going out again
+        vec2 cell = uv * 46.0;
+        float h = hash(floor(cell));
+        float dotv = smoothstep(0.30, 0.0, length(fract(cell) - 0.5));
+        float twinkle = pow(max(0.0, sin(u_time * 2.4 + h * 40.0)), 6.0);
+        col += vec3(1.0) * step(0.965, h) * dotv * twinkle * 0.9 * hover * near;
+    }
     col *= 1.0 - 0.10 * smoothstep(0.35, 0.75, distance(uv, vec2(0.5)));
     col += vec3(1.0) * 0.045 * smoothstep(0.012, 0.0, -sdf); // light catching the rim of the plate
 
@@ -994,6 +1070,8 @@ impl Gpu {
             f2("u_light", p.light);
             f1("u_glare", p.glare);
             i1("u_effect", p.effect);
+            i1("u_reflect", p.reflecting as i32);
+            f1("u_holo", p.holo);
             f1("u_flip", p.flip);
             i1("u_srgb", self.srgb_textures as i32);
             i1("u_pass", pass);
@@ -1030,6 +1108,11 @@ impl Gpu {
                 self.uniforms(self.fx, p, view, 1);
                 gl.draw_arrays(glow::TRIANGLES, 0, SPARKS * 6);
             } else {
+                if p.reflect {
+                    let mirrored = Params { reflecting: true, ..*p };
+                    self.uniforms(self.program, &mirrored, view, 0);
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                }
                 self.uniforms(self.program, p, view, 0);
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
@@ -1165,11 +1248,11 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for track in 0..200u64 {
             let id = CoverEffect::Random.shader_id(track);
-            assert!((0..11).contains(&id));
+            assert!((0..12).contains(&id));
             assert_eq!(id, CoverEffect::Random.shader_id(track));
             seen.insert(id);
         }
-        assert!(seen.len() >= 9, "{seen:?}");
+        assert!(seen.len() >= 10, "{seen:?}");
         assert_eq!(CoverEffect::Explode.shader_id(1), EXPLODE);
         assert_eq!(CoverEffect::Liquid.shader_id(5), 0);
         assert_eq!(CoverEffect::Iris.shader_id(5), 8);

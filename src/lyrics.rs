@@ -121,6 +121,10 @@ pub struct View {
     scroll: f32,
     follow_after: f64,
     started: bool,
+    /// The sung word glows.
+    pub glow: bool,
+    /// Lines far from the sung one are softly blurred.
+    pub depth: bool,
 }
 
 impl View {
@@ -248,7 +252,17 @@ impl View {
                 let pos = Pos2::new(inner.left() + b.x, y0 + b.y);
                 let dim = with_alpha_f(TEXT, base);
                 if !is_active {
-                    painter.text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), dim);
+                    // far from the sung line the words go out of focus: a ring of faint copies
+                    let blur = if self.depth { smoothstep(0.14, 0.60, dist) * 3.6 } else { 0.0 };
+                    if blur > 0.5 {
+                        painter.text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, base * 0.10));
+                        for k in 0..8 {
+                            let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                            painter.text(pos + egui::vec2(a.cos(), a.sin()) * blur, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, base * 0.022));
+                        }
+                    } else {
+                        painter.text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), dim);
+                    }
                     continue;
                 }
                 // the sung part of the word is bright, the rest waits in the dim colour
@@ -258,6 +272,24 @@ impl View {
                 painter.text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, 0.40 * edge));
                 if fill > 0.0 {
                     let clip = Rect::from_min_max(Pos2::new(pos.x - 2.0, pos.y - 4.0), Pos2::new(pos.x + b.w * fill + 1.0, pos.y + ROW_HEIGHT));
+                    if self.glow {
+                        // a soft halo round the sung part, strongest while the word is being sung
+                        let halo_clip = clip.expand(7.0).intersect(rect);
+                        let halo = ui::lerp_color(TEXT, ui::accent(), 0.55);
+                        let strength = 0.55 + 0.45 * (fill * (1.0 - fill) * 4.0);
+                        for (radius, alpha) in [(3.0_f32, 0.020_f32), (6.0, 0.012)] {
+                            for k in 0..8 {
+                                let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                                painter.with_clip_rect(halo_clip).text(
+                                    pos + egui::vec2(a.cos(), a.sin()) * radius,
+                                    egui::Align2::LEFT_TOP,
+                                    &w.text,
+                                    font.clone(),
+                                    with_alpha_f(halo, alpha * strength * edge),
+                                );
+                            }
+                        }
+                    }
                     painter.with_clip_rect(clip.intersect(rect)).text(pos, egui::Align2::LEFT_TOP, &w.text, font.clone(), with_alpha_f(TEXT, edge));
                 }
             }

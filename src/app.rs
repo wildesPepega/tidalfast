@@ -323,6 +323,8 @@ pub struct App {
     credits: Option<Vec<CreditGroup>>,
     lyrics_view: crate::lyrics::View,
     viz: [f32; VIZ_BARS],
+    /// Smoothed bass level 0‥1 (for the backdrop that breathes).
+    bass: f32,
     viz_ref: f32,
     avatar_rect: egui::Rect,
     settings_tab: SettingsTab,
@@ -470,6 +472,7 @@ impl App {
             credits: None,
             lyrics_view: Default::default(),
             viz: [0.0; VIZ_BARS],
+            bass: 0.0,
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
@@ -3527,6 +3530,8 @@ impl App {
         let small = track.cover_url(COVER_NOW).and_then(|u| self.textures.get(&u)).map(|t| t.id());
         let age = self.track_changed.elapsed().as_secs_f32();
         let textures = &self.textures;
+        self.cover3d.reflection = self.cfg.cover_reflection;
+        self.cover3d.holo = self.cfg.cover_holo;
         self.cover3d.show(
             ui,
             cover_rect,
@@ -3620,6 +3625,8 @@ impl App {
             self.lyrics_view.set(id, &lyrics.synced, self.duration);
         }
         let time = self.lyric_time();
+        self.lyrics_view.glow = self.cfg.lyric_glow;
+        self.lyrics_view.depth = self.cfg.lyric_depth;
         self.lyrics_view.show(ui, time, self.playing && !self.finished)
     }
 
@@ -3941,55 +3948,49 @@ impl App {
             SettingsTab::Equalizer => self.equalizer_view(ui),
             SettingsTab::Appearance => {
                 ui.heading("Appearance");
+
+                settings_group(ui, "Colours");
+                let mut v = self.cfg.theme_from_cover;
+                if toggle_row(ui, &mut v, "Match the interface to the cover",
+                    "Accent colour, panels and menus take the colours of the playing cover. Grey, very dark or very bright covers fall back to the default look.") {
+                    self.cfg.theme_from_cover = v;
+                    self.touch();
+                }
+                let mut v = self.cfg.cover_backdrop;
+                if toggle_row(ui, &mut v, "Cover backdrop", "The blurred cover and its colours behind the app. Off: a calm, fixed backdrop.") {
+                    self.cfg.cover_backdrop = v;
+                    self.touch();
+                }
+                let mut v = self.cfg.fluid_backdrop;
+                if toggle_row(ui, &mut v, "Fluid gradient", "Slowly drifting colour fields from the cover instead of the blurred picture.") {
+                    self.cfg.fluid_backdrop = v;
+                    self.touch();
+                }
+                let mut v = self.cfg.audio_reactive;
+                if toggle_row(ui, &mut v, "Audio reactive", "The backdrop breathes with the bass of the music.") {
+                    self.cfg.audio_reactive = v;
+                    self.touch();
+                }
+
+                settings_group(ui, "Cover");
+                let mut v = self.cfg.animated_covers;
+                if toggle_row(ui, &mut v, "Animated covers", "Some albums have a looping video. It plays in the full-screen player and moves the backdrop along.") {
+                    self.cfg.animated_covers = v;
+                    self.touch();
+                }
+                let mut v = self.cfg.cover_reflection;
+                if toggle_row(ui, &mut v, "Reflection", "A soft mirror image below the cover in the full-screen player.") {
+                    self.cfg.cover_reflection = v;
+                    self.touch();
+                }
+                let mut v = self.cfg.cover_holo;
+                if toggle_row(ui, &mut v, "Holo foil", "A rainbow sheen with sparkles that follows the mouse over the cover.") {
+                    self.cfg.cover_holo = v;
+                    self.touch();
+                }
                 ui.add_space(8.0);
-                let mut theme = self.cfg.theme_from_cover;
-                if ui::checkbox(ui, &mut theme, "Match the interface to the cover").changed() {
-                    self.cfg.theme_from_cover = theme;
-                    self.touch();
-                }
-                ui.label(
-                    RichText::new(
-                        "Accent colour, panels, menus and settings take their colours from the playing song's cover. \
-                         Grey or very dark and very bright covers fall back to the default look so everything stays readable.",
-                    )
-                    .color(TEXT_DIM),
-                );
-                ui.add_space(14.0);
-                let mut backdrop = self.cfg.cover_backdrop;
-                if ui::checkbox(ui, &mut backdrop, "Cover backdrop").changed() {
-                    self.cfg.cover_backdrop = backdrop;
-                    self.touch();
-                }
-                ui.label(
-                    RichText::new("The blurred cover and its colours behind the whole app. Off: a calm, fixed backdrop.")
-                        .color(TEXT_DIM),
-                );
-
-                ui.add_space(14.0);
-                let mut animated = self.cfg.animated_covers;
-                if ui::checkbox(ui, &mut animated, "Animated covers").changed() {
-                    self.cfg.animated_covers = animated;
-                    self.touch();
-                }
-                ui.label(
-                    RichText::new(
-                        "Some albums have a looping video instead of a still cover. It plays in the full-screen player and \
-                         moves the backdrop along. Off: always the still cover (saves a little power).",
-                    )
-                    .color(TEXT_DIM),
-                );
-
-                ui.add_space(18.0);
-                settings_label(ui, "Cover transition");
-                ui.label(
-                    RichText::new(
-                        "How the next cover takes over in the full-screen player when the song changes. With a crossfade \
-                         it takes as long as the crossfade.",
-                    )
-                    .size(12.5)
-                    .color(TEXT_DIM),
-                );
-                ui.add_space(6.0);
+                settings_label(ui, "Transition when the song changes");
+                ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     for effect in crate::cover3d::CoverEffect::ALL {
                         let label = effect.label();
@@ -3999,6 +4000,19 @@ impl App {
                         }
                     }
                 });
+                ui.label(RichText::new("With a crossfade, the transition takes as long as the crossfade.").size(12.5).color(TEXT_DIM));
+
+                settings_group(ui, "Lyrics");
+                let mut v = self.cfg.lyric_glow;
+                if toggle_row(ui, &mut v, "Glowing word", "The word being sung gets a soft glow.") {
+                    self.cfg.lyric_glow = v;
+                    self.touch();
+                }
+                let mut v = self.cfg.lyric_depth;
+                if toggle_row(ui, &mut v, "Depth blur", "Lines far from the sung one go softly out of focus.") {
+                    self.cfg.lyric_depth = v;
+                    self.touch();
+                }
             }
             SettingsTab::Discord => {
                 ui.heading("Discord");
@@ -4752,6 +4766,16 @@ impl eframe::App for App {
         if self.shot.play {
             self.viz = [0.9, 0.55, 0.75, 0.4, 0.6];
         }
+        {
+            // the bass: quick to rise, slow to fall
+            let dt = ctx.input(|i| i.stable_dt).min(0.1);
+            let target = if self.cfg.audio_reactive && self.playing { self.viz[0].clamp(0.0, 1.0) } else { 0.0 };
+            let rate = if target > self.bass { 18.0 } else { 4.5 };
+            self.bass += (target - self.bass) * (1.0 - (-dt * rate).exp());
+            if self.bass < 0.002 && target == 0.0 {
+                self.bass = 0.0;
+            }
+        }
 
         self.shortcuts(ctx);
 
@@ -4828,7 +4852,11 @@ impl eframe::App for App {
             if backdrop { tex(&self.wall_url) } else { None },
             if backdrop { tex(&self.wall_prev) } else { None },
             self.wall_t,
+            ui::WallFx { fluid: self.cfg.fluid_backdrop, bass: self.bass, time: now as f32 },
         );
+        if self.cfg.fluid_backdrop || self.bass > 0.0 {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
 
         // Layout: floating glass cards on the wallpaper, all with the same gap
         // to each other and to the window edge. Every card clips its content.
@@ -5484,6 +5512,28 @@ fn album_kind(album: &Album) -> &'static str {
     }
 }
 
+/// A heading that starts a group of settings.
+fn settings_group(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(20.0);
+    ui.label(RichText::new(title).strong().size(15.5).color(ui::accent()));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, ui::with_alpha(ui::TEXT, 24));
+    ui.add_space(6.0);
+}
+
+/// One switch with its one-line explanation below; true when it was clicked.
+fn toggle_row(ui: &mut egui::Ui, value: &mut bool, title: &str, help: &str) -> bool {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let changed = ui::checkbox(ui, value, title).changed();
+    ui.add_space(-4.0);
+    ui.horizontal_top(|ui| {
+        ui.add_space(30.0);
+        ui.add(egui::Label::new(RichText::new(help).size(12.5).color(TEXT_DIM)).wrap());
+    });
+    ui.add_space(7.0);
+    changed
+}
+
 fn settings_label(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(13.0).color(TEXT_DIM));
 }
@@ -6125,6 +6175,9 @@ mod debug_shot {
             }
             if let Ok(n) = std::env::var("TIDALFAST_SHOT_EFFECT").unwrap_or_default().parse::<usize>() {
                 self.cfg.cover_effect = crate::cover3d::CoverEffect::ALL[n % crate::cover3d::CoverEffect::ALL.len()];
+            }
+            if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
+                self.cfg.fluid_backdrop = true;
             }
             if let Some((x, y)) = self.shot.mouse {
                 self.cover3d.debug_pointer = Some(egui::vec2(x, y));

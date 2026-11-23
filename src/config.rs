@@ -39,6 +39,18 @@ pub struct Settings {
     pub cover_backdrop: bool,
     /// Play the looping videos that some albums have instead of their still cover.
     pub animated_covers: bool,
+    /// A mirror image below the cover in the full-screen player.
+    pub cover_reflection: bool,
+    /// A rainbow foil sheen on the cover that follows the mouse.
+    pub cover_holo: bool,
+    /// Drifting colour fields from the cover instead of the blurred cover as backdrop.
+    pub fluid_backdrop: bool,
+    /// The backdrop breathes with the bass.
+    pub audio_reactive: bool,
+    /// The sung word glows.
+    pub lyric_glow: bool,
+    /// Lines far from the sung one are softly blurred.
+    pub lyric_depth: bool,
     /// How the next cover takes over in the full-screen player.
     pub cover_effect: crate::cover3d::CoverEffect,
     /// Serve the now-playing overlay page on localhost, and the port for it.
@@ -107,6 +119,12 @@ impl Default for Settings {
             theme_from_cover: true,
             cover_backdrop: true,
             animated_covers: true,
+            cover_reflection: true,
+            cover_holo: true,
+            fluid_backdrop: false,
+            audio_reactive: false,
+            lyric_glow: true,
+            lyric_depth: true,
             cover_effect: Default::default(),
             overlay: false,
             overlay_port: 7788,

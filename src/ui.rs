@@ -417,12 +417,58 @@ pub fn blur_thumb(rgba: &[u8], width: usize, height: usize) -> egui::ColorImage 
 /// The full-window wallpaper: the current cover, heavily blurred, filling
 /// the window and dimmed so text stays readable. `previous` fades out while
 /// `cover` fades in (`t` 0‥1). Without a cover the palette glows instead.
+/// How the wallpaper moves.
+#[derive(Clone, Copy, Default)]
+pub struct WallFx {
+    /// Drifting colour fields instead of the blurred cover.
+    pub fluid: bool,
+    /// 0‥1 bass level (0 when the backdrop should not react).
+    pub bass: f32,
+    pub time: f32,
+}
+
+/// A soft round glow: opaque in the middle, nothing at the edge.
+pub fn soft_orb(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: Color32) {
+    const SEGMENTS: usize = 36;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(center, color);
+    for i in 0..=SEGMENTS {
+        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        mesh.colored_vertex(center + egui::vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
+    }
+    for i in 0..SEGMENTS as u32 {
+        mesh.add_triangle(0, i + 1, i + 2);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Big colour fields in the song's colours that drift slowly and swell with the bass.
+fn paint_fluid(painter: &egui::Painter, rect: Rect, colors: &[Color32; 3], fx: WallFx) {
+    let fields = [
+        colors[0],
+        colors[1],
+        colors[2],
+        lerp_color(colors[0], colors[2], 0.5),
+        lerp_color(colors[1], Color32::WHITE, 0.25),
+    ];
+    let size = rect.width().max(rect.height());
+    for (i, color) in fields.iter().enumerate() {
+        let k = i as f32;
+        let x = 0.5 + 0.42 * (fx.time * (0.07 + 0.021 * k) + k * 2.1).sin();
+        let y = 0.5 + 0.40 * (fx.time * (0.06 + 0.017 * k) + k * 1.3).cos();
+        let center = egui::pos2(rect.left() + rect.width() * x, rect.top() + rect.height() * y);
+        let radius = size * (0.46 + 0.04 * (fx.time * 0.15 + k).sin()) * (1.0 + 0.16 * fx.bass * (1.0 + 0.3 * (k % 2.0)));
+        soft_orb(painter, center, radius, with_alpha(*color, (120.0 + 70.0 * fx.bass).min(255.0) as u8));
+    }
+}
+
 pub fn paint_song_wallpaper(
     ctx: &egui::Context,
     colors: &[Color32; 3],
     cover: Option<egui::TextureId>,
     previous: Option<egui::TextureId>,
     t: f32,
+    fx: WallFx,
 ) {
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
@@ -441,6 +487,7 @@ pub fn paint_song_wallpaper(
         Color32::from_rgba_premultiplied(v, v, v, v)
     };
     match (cover, previous) {
+        _ if fx.fluid => paint_fluid(&painter, rect, colors, fx),
         (Some(new), old) => {
             if let Some(old) = old.filter(|_| t < 1.0) {
                 painter.image(old, rect, uv, Color32::WHITE);
@@ -451,7 +498,7 @@ pub fn paint_song_wallpaper(
     }
 
     // dim evenly, a little more towards the edges and the bottom
-    painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(9, 10, 16, 105));
+    painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(9, 10, 16, (105.0 - 46.0 * fx.bass) as u8));
     let mut shade = egui::Mesh::default();
     let mid = rect.top() + rect.height() * 0.45;
     shade.colored_vertex(egui::pos2(rect.left(), mid), Color32::TRANSPARENT);

@@ -7,17 +7,7 @@ use crate::ui::{self, accent, with_alpha, TEXT, TEXT_DIM};
 
 /// A soft round glow: opaque in the middle, nothing at the edge.
 pub fn orb(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
-    const SEGMENTS: usize = 40;
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(center, color);
-    for i in 0..=SEGMENTS {
-        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        mesh.colored_vertex(center + egui::vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
-    }
-    for i in 0..SEGMENTS as u32 {
-        mesh.add_triangle(0, i + 1, i + 2);
-    }
-    painter.add(egui::Shape::mesh(mesh));
+    ui::soft_orb(painter, center, radius, color);
 }
 
 /// Colour clouds that drift around slowly (in the colours of the theme).

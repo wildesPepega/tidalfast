@@ -266,6 +266,8 @@ pub struct App {
     position_saved: Instant,
     /// What the song cache takes on disk, and when that was measured.
     cache_size: Option<(u64, Instant)>,
+    /// All caches together, for the System page.
+    cache_total: Option<(u64, Instant)>,
     /// Start the song that is being loaded as soon as it is ready (a pause meanwhile clears this).
     autoplay: bool,
     scrub: f64,
@@ -447,6 +449,7 @@ impl App {
             start_seek: None,
             position_saved: Instant::now(),
             cache_size: None,
+            cache_total: None,
             autoplay: true,
             scrub: 0.0,
             scrubbing: false,
@@ -4279,6 +4282,8 @@ impl App {
             SettingsTab::System => {
                 ui.heading("System");
                 ui.add_space(8.0);
+                self.cache_overview(ui);
+                ui.add_space(14.0);
 
                 let mut media = self.cfg.media_keys;
                 if ui::checkbox(ui, &mut media, "Media keys and media controls").changed() {
@@ -4317,7 +4322,8 @@ impl App {
                 ui.add_space(14.0);
                 let mut close_to_tray = self.cfg.close_to_tray;
                 if ui
-                    .add_enabled(self.cfg.tray, egui::Checkbox::new(&mut close_to_tray, "Keep running in the tray when closed"))
+                    .add_enabled_ui(self.cfg.tray, |ui| ui::checkbox(ui, &mut close_to_tray, "Keep running in the tray when closed"))
+                    .inner
                     .changed()
                 {
                     self.cfg.close_to_tray = close_to_tray;
@@ -4383,7 +4389,8 @@ impl App {
         let blocked = update::cannot_self_update();
         let mut auto = self.cfg.auto_update;
         if ui
-            .add_enabled(blocked.is_none(), egui::Checkbox::new(&mut auto, "Install updates automatically"))
+            .add_enabled_ui(blocked.is_none(), |ui| ui::checkbox(ui, &mut auto, "Install updates automatically"))
+            .inner
             .changed()
         {
             self.cfg.auto_update = auto;
@@ -4499,6 +4506,36 @@ impl App {
                 self.cache_size = None;
             }
         });
+        ui.ctx().request_repaint_after(Duration::from_secs(3));
+    }
+
+    /// Everything that is kept on disk to start fast, with one button to throw it all away.
+    fn cache_overview(&mut self, ui: &mut egui::Ui) {
+        settings_label(ui, "Cache");
+        if self.cache_total.map_or(true, |(_, at)| at.elapsed() > Duration::from_secs(3)) {
+            self.cache_total = Some((crate::cache::total_size(), Instant::now()));
+        }
+        let total = self.cache_total.map_or(0, |(s, _)| s);
+        ui.label(
+            RichText::new(format!(
+                "Songs, covers and lists that tidalfast keeps to start fast: {}. Nothing in it is needed; it is made again as you listen.",
+                human_bytes(total)
+            ))
+            .size(12.5)
+            .color(TEXT_DIM),
+        );
+        ui.add_space(4.0);
+        if action_button(ui, icons::TRASH, "Clear all caches", false).clicked() {
+            crate::cache::clear_all();
+            self.cache_total = None;
+            self.cache_size = None;
+            // what was shown from the cache is loaded again
+            self.textures.clear();
+            self.requested.clear();
+            self.blur_tex.clear();
+            self.wall_tried.clear();
+            self.toast("Cache cleared".into());
+        }
         ui.ctx().request_repaint_after(Duration::from_secs(3));
     }
 

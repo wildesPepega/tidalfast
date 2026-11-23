@@ -1,9 +1,17 @@
 //! A cache of the songs that were played, on disk: playing one again starts at once (no stream
 //! lookup, no download) and works without a connection. The newest songs stay; the oldest go
 //! when the cache grows past its limit.
+//!
+//! The files are scrambled with a key that belongs to this installation, so they cannot simply be
+//! opened in a player or copied around as music files. (That keeps casual copying out; it is no
+//! protection against someone who has the key file too.)
 
 use std::fs;
 use std::io::Write;
+use std::sync::OnceLock;
+
+use chacha20::cipher::{KeyIvInit, StreamCipher};
+use chacha20::ChaCha20;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
@@ -23,17 +31,109 @@ pub fn enabled() -> bool {
 
 /// The cache in the user's cache folder.
 pub fn global() -> Option<Cache> {
-    dirs::cache_dir().map(|d| Cache { dir: d.join("tidalfast").join("audio") })
+    let dir = dirs::cache_dir()?.join("tidalfast").join("audio");
+    Some(Cache { dir, key: install_key()? })
+}
+
+/// Where the songs are kept.
+pub fn dir() -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| d.join("tidalfast").join("audio"))
 }
 
 pub struct Cache {
     dir: PathBuf,
+    key: [u8; 32],
+}
+
+/// "Scrambled song, version 1".
+const MAGIC: &[u8; 4] = b"TFA1";
+const NONCE_LEN: usize = 12;
+const TAG_LEN: usize = 8;
+const HEADER_LEN: usize = 4 + NONCE_LEN + TAG_LEN;
+
+/// This installation's key, made on first use and kept next to the settings.
+fn install_key() -> Option<[u8; 32]> {
+    static KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
+    *KEY.get_or_init(|| {
+        let path = dirs::config_dir()?.join("tidalfast").join("cache.key");
+        if let Ok(bytes) = fs::read(&path) {
+            if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                return Some(key);
+            }
+        }
+        let key = random_bytes::<32>();
+        fs::create_dir_all(path.parent()?).ok()?;
+        fs::write(&path, key).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        Some(key)
+    })
+}
+
+/// Unpredictable bytes without another dependency: the standard library seeds its hash with
+/// the operating system's randomness for every new `RandomState`.
+fn random_bytes<const N: usize>() -> [u8; N] {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let mut out = [0u8; N];
+    for (i, chunk) in out.chunks_mut(8).enumerate() {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u64(i as u64);
+        h.write_u128(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+        h.write_u32(std::process::id());
+        let bytes = h.finish().to_le_bytes();
+        chunk.copy_from_slice(&bytes[..chunk.len()]);
+    }
+    out
+}
+
+/// What identifies the right key in the file (so a wrong key is noticed, not played as noise).
+fn tag(key: &[u8; 32], nonce: &[u8; NONCE_LEN]) -> [u8; TAG_LEN] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"tidalfast cache tag");
+    hasher.update(key);
+    hasher.update(nonce);
+    let digest = hasher.finalize();
+    let mut out = [0u8; TAG_LEN];
+    out.copy_from_slice(&digest[..TAG_LEN]);
+    out
 }
 
 impl Cache {
     #[cfg(test)]
     fn at(dir: PathBuf) -> Self {
-        Self { dir }
+        Self { dir, key: [9u8; 32] }
+    }
+
+    fn scramble(&self, plain: &[u8]) -> Vec<u8> {
+        let nonce = random_bytes::<NONCE_LEN>();
+        let mut out = Vec::with_capacity(HEADER_LEN + plain.len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&tag(&self.key, &nonce));
+        out.extend_from_slice(plain);
+        ChaCha20::new((&self.key).into(), (&nonce).into()).apply_keystream(&mut out[HEADER_LEN..]);
+        out
+    }
+
+    /// The song inside a scrambled file; `None` for anything else (an old plain copy, a file of
+    /// another installation, a damaged one).
+    fn unscramble(&self, file: Vec<u8>) -> Option<Vec<u8>> {
+        if file.len() <= HEADER_LEN || &file[..4] != MAGIC {
+            return None;
+        }
+        let nonce: [u8; NONCE_LEN] = file[4..4 + NONCE_LEN].try_into().ok()?;
+        if file[4 + NONCE_LEN..HEADER_LEN] != tag(&self.key, &nonce) {
+            return None;
+        }
+        let mut plain = file;
+        plain.drain(..HEADER_LEN);
+        ChaCha20::new((&self.key).into(), (&nonce).into()).apply_keystream(&mut plain);
+        Some(plain)
     }
 
     fn file(&self, track: u64, quality: &str) -> PathBuf {
@@ -58,7 +158,11 @@ impl Cache {
     /// The song's bytes and quality; counts as "used just now" for the cleaning up.
     pub fn read(&self, track: u64) -> Option<(Vec<u8>, String)> {
         let (path, quality) = self.find(track)?;
-        let bytes = fs::read(&path).ok()?;
+        let Some(bytes) = fs::read(&path).ok().and_then(|f| self.unscramble(f)) else {
+            // not ours to read (an unscrambled copy from an older version, or damaged): drop it
+            let _ = fs::remove_file(&path);
+            return None;
+        };
         if let Ok(file) = fs::OpenOptions::new().write(true).open(&path) {
             let _ = file.set_modified(SystemTime::now());
         }
@@ -74,7 +178,8 @@ impl Cache {
         self.remove(track);
         let target = self.file(track, quality);
         let part = target.with_extension("part");
-        let written = fs::File::create(&part).and_then(|mut f| f.write_all(bytes).and_then(|_| f.flush()));
+        let scrambled = self.scramble(bytes);
+        let written = fs::File::create(&part).and_then(|mut f| f.write_all(&scrambled).and_then(|_| f.flush()));
         if written.is_err() || fs::rename(&part, &target).is_err() {
             let _ = fs::remove_file(&part);
         }
@@ -161,6 +266,40 @@ mod tests {
     }
 
     #[test]
+    fn files_on_disk_are_not_the_song() {
+        let c = Cache::at(scratch("scrambled"));
+        let song: Vec<u8> = b"fLaC-pretend-this-is-a-song-".iter().cycle().take(4000).copied().collect();
+        c.store(5, "LOSSLESS", &song);
+        let (path, _) = c.find(5).unwrap();
+        let on_disk = fs::read(&path).unwrap();
+        assert_eq!(on_disk.len(), song.len() + HEADER_LEN);
+        assert!(!on_disk.windows(10).any(|w| w == b"pretend-th"), "no readable piece of the song");
+        assert!(!on_disk.starts_with(b"fLaC"), "does not look like a FLAC file");
+        assert_eq!(c.read(5).unwrap().0, song);
+        // two copies of the same song look different (fresh nonce)
+        c.store(6, "LOSSLESS", &song);
+        let (p6, _) = c.find(6).unwrap();
+        assert_ne!(fs::read(p6).unwrap()[HEADER_LEN..], on_disk[HEADER_LEN..]);
+        c.clear();
+    }
+
+    #[test]
+    fn another_installations_files_and_old_plain_copies_are_dropped() {
+        let dir = scratch("foreign");
+        let mine = Cache::at(dir.clone());
+        mine.store(8, "LOSSLESS", b"a song that is long enough to matter");
+        let stranger = Cache { dir: dir.clone(), key: [1u8; 32] };
+        assert!(stranger.read(8).is_none(), "wrong key: not played as noise");
+        assert!(!mine.has(8), "and removed");
+        // an unscrambled file as the first version left them
+        fs::write(dir.join("9-LOSSLESS.audio"), b"fLaC plain old copy that nobody should be able to just play").unwrap();
+        assert!(mine.has(9));
+        assert!(mine.read(9).is_none());
+        assert!(!mine.has(9), "dropped for good");
+        mine.clear();
+    }
+
+    #[test]
     fn a_new_version_replaces_the_old_one() {
         let c = Cache::at(scratch("replace"));
         c.store(7, "LOSSLESS", b"old");
@@ -188,7 +327,7 @@ mod tests {
             let file = fs::OpenOptions::new().write(true).open(path).unwrap();
             file.set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000 * id)).unwrap();
         }
-        assert_eq!(c.size(), 400);
+        assert_eq!(c.size(), 4 * (100 + HEADER_LEN as u64));
         // song 1 is played again: it is now the newest
         c.read(1).unwrap();
         c.prune(250);

@@ -793,7 +793,7 @@ pub fn cached_cover(url: &str) -> Option<Vec<u8>> {
 /// Upper bound for the on-disk cover cache.
 const CACHE_LIMIT_BYTES: u64 = 400 * 1024 * 1024;
 
-fn cache_dir() -> Option<std::path::PathBuf> {
+pub fn cache_dir() -> Option<std::path::PathBuf> {
     dirs::cache_dir().map(|d| d.join("tidalfast").join("covers"))
 }
 

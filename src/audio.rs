@@ -741,6 +741,8 @@ mod cache_tests {
         let dir = std::env::temp_dir().join(format!("tidalfast-fetch-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("XDG_CACHE_HOME", &dir);
+        // (the key of this installation is made next to the settings: keep the real ones out of it)
+        std::env::set_var("XDG_CONFIG_HOME", dir.join("config"));
         crate::audiocache::configure(true, 1 << 30);
         let url = serve(vec![7u8; 5000]);
 

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-fn dir() -> Option<PathBuf> {
+pub fn dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("tidalfast").join("data"))
 }
 
@@ -35,5 +35,38 @@ pub fn write<T: Serialize>(name: &str, value: &T) {
 pub fn clear() {
     if let Some(dir) = dir() {
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Bytes in a folder, including everything below it.
+fn folder_size(path: &std::path::Path) -> u64 {
+    std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => folder_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// Everything the app keeps to start fast: songs, covers, the lists of the account.
+pub fn total_size() -> u64 {
+    [crate::audiocache::dir(), crate::net::cache_dir(), dir()]
+        .into_iter()
+        .flatten()
+        .map(|p| folder_size(&p))
+        .sum()
+}
+
+/// Delete all of it. (Settings and the sign-in are not part of the cache.)
+pub fn clear_all() {
+    if let Some(songs) = crate::audiocache::global() {
+        songs.clear();
+    }
+    for path in [crate::net::cache_dir(), dir()].into_iter().flatten() {
+        let _ = std::fs::remove_dir_all(path);
     }
 }

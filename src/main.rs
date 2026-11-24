@@ -21,6 +21,7 @@ mod kwin;
 mod link;
 mod markdown;
 mod login;
+mod plugins;
 mod lyrics;
 mod model;
 mod nav;

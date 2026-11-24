@@ -1,0 +1,8 @@
+name = "Cover, blue when idle"
+author = "tidalfast"
+description = "Follows the cover of the playing song; these blue colours are used when there is nothing to follow."
+follow_cover = true
+
+[colors]
+accent = "#8ab4f8"
+wallpaper = ["#1a2a6c", "#2b1a5e", "#0b3a5c"]

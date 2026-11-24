@@ -223,7 +223,7 @@ pub fn theme_for(palette: [Color32; 3]) -> Theme {
     Theme { accent, tint, light }
 }
 
-fn panel_solid_for(tint: Color32) -> Color32 {
+pub fn panel_solid_for(tint: Color32) -> Color32 {
     Color32::from_rgb(tint.r() + 3, tint.g() + 3, tint.b() + 4)
 }
 

@@ -1,0 +1,7 @@
+id = "focus"
+name = "Focus mode"
+version = "1.0"
+author = "tidalfast"
+description = "Hides the lyrics, credits, queue and search so only the music is left. Switch it on and off in its settings."
+api = 1
+permissions = ["ui.modify", "ui.settings"]

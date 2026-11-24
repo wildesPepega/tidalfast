@@ -39,6 +39,14 @@ pub struct Settings {
     pub cover_backdrop: bool,
     /// Play the looping videos that some albums have instead of their still cover.
     pub animated_covers: bool,
+    /// Let plugins run at all (the master switch).
+    pub plugins_enabled: bool,
+    /// Accept edits to a plugin's script without asking again (for people who write plugins).
+    pub plugin_dev_mode: bool,
+    /// What the user decided for each plugin.
+    pub plugin_cfg: std::collections::BTreeMap<String, crate::plugins::PluginCfg>,
+    /// The theme file in use (its id); empty = the built-in look.
+    pub theme: String,
     /// A mirror image below the cover in the full-screen player.
     pub cover_reflection: bool,
     /// A rainbow foil sheen on the cover that follows the mouse.
@@ -119,6 +127,10 @@ impl Default for Settings {
             theme_from_cover: true,
             cover_backdrop: true,
             animated_covers: true,
+            plugins_enabled: true,
+            plugin_dev_mode: false,
+            plugin_cfg: Default::default(),
+            theme: String::new(),
             cover_reflection: true,
             cover_holo: true,
             fluid_backdrop: false,

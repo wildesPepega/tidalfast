@@ -1,0 +1,8 @@
+name = "Midnight"
+author = "tidalfast"
+description = "Cool blue on deep navy glass."
+
+[colors]
+accent = "#8ab4f8"
+panel = "#0f1220"
+wallpaper = ["#1a2a6c", "#2b1a5e", "#0b3a5c"]

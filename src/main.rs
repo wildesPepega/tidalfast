@@ -29,6 +29,7 @@ mod net;
 mod presence;
 mod overlay;
 mod system;
+mod theme_file;
 mod tidal;
 mod transition;
 mod ui;

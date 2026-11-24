@@ -1,0 +1,7 @@
+id = "hello"
+name = "Hello"
+version = "1.0"
+author = "tidalfast"
+description = "A small example: a button, a song menu entry, a settings page and a notification when the song changes."
+api = 1
+permissions = ["player.read", "ui.toast", "ui.buttons", "ui.menus", "ui.settings", "storage"]

@@ -41,6 +41,7 @@ pub struct PluginCfg {
 #[derive(Debug, Clone)]
 pub struct Plugin {
     pub manifest: Manifest,
+    #[allow(dead_code)]
     pub dir: PathBuf,
     pub script: String,
     /// SHA-256 of `plugin.toml` and the script.
@@ -435,5 +436,58 @@ mod tests {
         m.sync(&cfg, false, false);
         assert!(m.running.is_empty());
         assert!(m.buttons(Place::Header).is_empty());
+    }
+
+    /// The examples in the repository are part of the documentation: they have to work.
+    #[test]
+    fn the_example_plugins_load_and_start_without_errors() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join("plugins");
+        let mut m = Manager::with_dirs(Arc::new(|| {}), root, temp());
+        assert!(m.problems.is_empty(), "{:?}", m.problems);
+        assert!(m.plugins.len() >= 3);
+        let cfg: BTreeMap<String, PluginCfg> = m.plugins.iter().map(|p| (p.manifest.id.clone(), consent(p))).collect();
+        m.sync(&cfg, true, false);
+        let end = std::time::Instant::now() + Duration::from_secs(8);
+        while m.running.values().any(|r| !r.ready && r.alive) && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+            m.poll();
+        }
+        for (id, r) in &m.running {
+            assert!(r.ready && r.alive, "{id}: {:?}", r.stopped);
+            assert!(!r.log.iter().any(|(error, _)| *error), "{id}: {:?}", r.log);
+        }
+        assert!(!m.buttons(Place::Header).is_empty());
+        assert!(!m.menu_items().is_empty());
+        assert!(m.hidden("lyrics") == false, "focus mode starts off");
+    }
+
+    #[test]
+    fn the_example_themes_are_valid() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join("themes");
+        let (themes, problems) = crate::theme_file::discover(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(themes.len() >= 3);
+    }
+
+    /// API.md has to name everything the code offers.
+    #[test]
+    fn the_documentation_mentions_every_permission_part_and_icon() {
+        let doc = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("API.md")).unwrap();
+        for p in manifest::Permission::ALL {
+            assert!(doc.contains(&format!("`{}`", p.id())), "permission {} is not in API.md", p.id());
+        }
+        for (part, _) in registry::FEATURES {
+            assert!(doc.contains(&format!("`{part}`")), "part {part} is not in API.md");
+        }
+        for icon in registry::ICON_NAMES {
+            assert!(doc.contains(&format!("`{icon}`")), "icon {icon} is not in API.md");
+        }
+        for page in registry::BUILTIN_PAGES {
+            assert!(doc.contains(&format!("\"{page}\"")), "settings page {page} is not in API.md");
+        }
+        for handler in ["on_load", "on_track", "on_playing", "on_tick", "on_action", "on_setting", "on_unload", "hook_next", "hook_previous", "hook_play"] {
+            assert!(doc.contains(handler), "{handler} is not in API.md");
+        }
+        assert!(doc.contains(&format!("api = {}", manifest::API_VERSION)));
     }
 }

@@ -1,0 +1,7 @@
+id = "now-playing-card"
+name = "Copy now playing"
+version = "1.0"
+author = "tidalfast"
+description = "A button in the player bar that copies “Artist - Title” to the clipboard. Also asks before skipping with the next button (a hook), as a demo."
+api = 1
+permissions = ["player.read", "ui.buttons", "ui.toast", "clipboard", "hooks", "ui.settings"]

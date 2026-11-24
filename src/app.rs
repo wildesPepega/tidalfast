@@ -1,6 +1,7 @@
 //! The egui application: login, library, search, player, equaliser and settings.
 
 mod eq_view;
+mod plugins_ui;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::transition::TransitionMode;
 use crate::discord::{Discord, DiscordCmd};
 use crate::eq::EqShared;
 use crate::link;
+use crate::plugins;
 use crate::model::{format_duration, Album, Artist, ArtistPage, CreditGroup, ImportTrack, Lyrics, Playlist, SearchResults, Track};
 use crate::net::{Cmd, Ev, Net, Opened};
 use crate::ui::{
@@ -90,6 +92,9 @@ enum SettingsTab {
     Overlay,
     System,
     Account,
+    Plugins,
+    /// A settings page that a plugin made.
+    PluginPage,
 }
 
 const LIKED_UUID: &str = "liked";
@@ -326,6 +331,8 @@ pub struct App {
     viz_ref: f32,
     avatar_rect: egui::Rect,
     settings_tab: SettingsTab,
+    /// Plugins and themes in the interface.
+    pl: plugins_ui::PluginUi,
     profile_menu_open: bool,
     liked_count: Option<usize>,
 
@@ -473,6 +480,7 @@ impl App {
             viz_ref: -40.0,
             avatar_rect: egui::Rect::NOTHING,
             settings_tab: SettingsTab::Playback,
+            pl: plugins_ui::PluginUi::new(&cc.egui_ctx),
             lib_click: None,
             overlay: crate::overlay::Overlay::new(),
             cover3d: Default::default(),
@@ -949,6 +957,11 @@ impl App {
         if tracks.is_empty() {
             return;
         }
+        if let Some(first) = tracks.get(index.min(tracks.len() - 1)) {
+            if !self.plugin_allows("play", &self.plugin_track_json(first)) {
+                return;
+            }
+        }
         self.playing_from = source;
         if tracks.len() > 1 {
             self.radio_for = None;
@@ -988,6 +1001,10 @@ impl App {
 
     fn apply_track_action(&mut self, track: Track, action: TrackAction) {
         match action {
+            TrackAction::Plugin { plugin, id } => {
+                let data = serde_json::json!({ "track": self.plugin_track_json(&track) });
+                self.plugin_action(&plugin, &id, data);
+            }
             TrackAction::Play => self.play_single(track),
             TrackAction::SetLiked(liked) => self.set_liked(track.id, liked),
             TrackAction::AddToPlaylist { uuid, title } => self.net.send(Cmd::AddToPlaylist {
@@ -1266,6 +1283,10 @@ impl App {
         if self.queue.is_empty() {
             return;
         }
+        // a plugin may say no to a skip the user asked for (not to a song that simply ended)
+        if !auto && !self.plugin_allows("next", &serde_json::Value::Null) {
+            return;
+        }
         if auto && self.cfg.repeat == RepeatMode::One {
             self.start_current();
             return;
@@ -1296,6 +1317,9 @@ impl App {
 
     fn previous(&mut self) {
         if self.queue.is_empty() {
+            return;
+        }
+        if !self.plugin_allows("previous", &serde_json::Value::Null) {
             return;
         }
         // a few seconds in: back to the start of this track first
@@ -1897,7 +1921,8 @@ impl App {
             return;
         }
 
-        // centre: search
+        // centre: search (a plugin may have hidden it)
+        if !self.plugin_hidden("search") {
         let width = (rect.width() * 0.42).clamp(300.0, 520.0);
         let center = egui::Rect::from_center_size(rect.center(), egui::vec2(width, rect.height()));
         let mut mid = ui.new_child(
@@ -1989,6 +2014,9 @@ impl App {
             self.perform_search(true);
             resp.request_focus();
         }
+        }
+
+        self.plugin_header_buttons(ui, settings_tile);
 
         // right: settings / account menu
         let resp = ui.interact(settings_tile, egui::Id::new("settings_button"), egui::Sense::click());
@@ -2182,6 +2210,13 @@ impl App {
     }
 
     fn player_bar(&mut self, ui: &mut egui::Ui) {
+        let (hide_shuffle, hide_repeat, hide_queue, hide_volume, hide_like) = (
+            self.plugin_hidden("shuffle"),
+            self.plugin_hidden("repeat"),
+            self.plugin_hidden("queue"),
+            self.plugin_hidden("volume"),
+            self.plugin_hidden("like"),
+        );
         let current = self.current.clone();
         if let Some(url) = current.as_ref().and_then(|t| t.cover_url(COVER_NOW)) {
             self.request_cover(&url);
@@ -2195,7 +2230,7 @@ impl App {
         let mut want_like: Option<(u64, bool)> = None;
         let mut want_artist: Option<Artist> = None;
         let want_queue: bool;
-        let want_mute: bool;
+        let mut want_mute = false;
         let mut want_now = false;
         let cover_rect: egui::Rect;
         let mut player_action: Option<(Track, TrackAction)> = None;
@@ -2268,7 +2303,7 @@ impl App {
             want_now = resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| cover_rect.contains(p));
         }
         if let (Some(resp), Some(track)) = (now_resp, &current) {
-            let ctx = TrackCtx { liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
+            let ctx = TrackCtx { plugin_items: &self.pl.menu, liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
             let liked = self.liked_ids.contains(&track.id);
             resp.context_menu(|ui| track_menu(ui, track, liked, &ctx, &mut player_action));
         }
@@ -2283,7 +2318,9 @@ impl App {
             ui.allocate_ui_with_layout(egui::vec2(214.0, 42.0), centered, |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 let shuffle_tip = if self.cfg.shuffle { "Shuffle off" } else { "Shuffle on" };
-                want_shuffle = icon_button(ui, Icon::Shuffle, 30.0, self.cfg.shuffle).on_hover_text(shuffle_tip).clicked();
+                if !hide_shuffle {
+                    want_shuffle = icon_button(ui, Icon::Shuffle, 30.0, self.cfg.shuffle).on_hover_text(shuffle_tip).clicked();
+                }
                 want_prev = icon_button(ui, Icon::Prev, 30.0, false)
                     .on_hover_text(format!("Previous (Ctrl + {})", icons::ARROW_LEFT))
                     .clicked();
@@ -2297,14 +2334,16 @@ impl App {
                     RepeatMode::All => "Repeat: all",
                     RepeatMode::One => "Repeat: this track",
                 };
-                want_repeat = icon_button(
-                    ui,
-                    Icon::Repeat(self.cfg.repeat == RepeatMode::One),
-                    30.0,
-                    self.cfg.repeat != RepeatMode::Off,
-                )
-                .on_hover_text(repeat_tip)
-                .clicked();
+                if !hide_repeat {
+                    want_repeat = icon_button(
+                        ui,
+                        Icon::Repeat(self.cfg.repeat == RepeatMode::One),
+                        30.0,
+                        self.cfg.repeat != RepeatMode::Off,
+                    )
+                    .on_hover_text(repeat_tip)
+                    .clicked();
+                }
             });
             ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 20.0), centered, |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
@@ -2340,8 +2379,9 @@ impl App {
         {
             let ui = &mut right;
             ui.spacing_mut().item_spacing.x = 6.0;
-            want_queue = icon_button(ui, Icon::Queue, 30.0, self.queue_open).on_hover_text("Queue").clicked();
+            want_queue = !hide_queue && icon_button(ui, Icon::Queue, 30.0, self.queue_open).on_hover_text("Queue").clicked();
             ui.add_space(4.0);
+            if !hide_volume {
             let mut vol = self.cfg.volume;
             let slider_w = (ui.available_width() - 80.0).clamp(50.0, 120.0);
             let slider = thin_slider(ui, &mut vol, slider_w)
@@ -2367,12 +2407,15 @@ impl App {
                 .on_hover_text(mute_tip);
             pointer_on_hover(&speaker);
             want_mute = speaker.clicked();
+            }
             ui.add_space(6.0);
             let cur_id = current.as_ref().map(|t| t.id);
             let liked = cur_id.is_some_and(|id| self.liked_ids.contains(&id));
-            if ui::heart_button(ui, liked, 18.0, cur_id.is_some()).clicked() {
+            if !hide_like && ui::heart_button(ui, liked, 18.0, cur_id.is_some()).clicked() {
                 want_like = cur_id.map(|id| (id, !liked));
             }
+            // buttons of plugins, left of the heart
+            self.plugin_row_buttons(ui, plugins::Place::PlayerBar, 30.0, false);
         }
 
         if want_toggle {
@@ -2633,7 +2676,7 @@ impl App {
             let limit = if all { 5 } else { results.tracks.len() };
             for (i, track) in results.tracks.iter().take(limit).enumerate() {
                 let is_current = current_id == Some(track.id);
-                let ctx = TrackCtx { liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
+                let ctx = TrackCtx { plugin_items: &self.pl.menu, liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
                 let resp = track_row(ui, &self.textures, i + 1, track, is_current, &mut want, &ctx, &mut menu_action);
                 if resp.clicked() {
                     play_single = Some(track.clone());
@@ -3210,7 +3253,7 @@ impl App {
         let mut want = Vec::new();
         for (i, track) in open.tracks.iter().enumerate() {
             let is_current = current_id == Some(track.id);
-            let ctx = TrackCtx { liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
+            let ctx = TrackCtx { plugin_items: &self.pl.menu, liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
             let resp = track_row(ui, &self.textures, i + 1, track, is_current, &mut want, &ctx, &mut menu_action);
             if resp.clicked() {
                 play = Some(i);
@@ -3398,7 +3441,7 @@ impl App {
             section_title(ui, "Popular tracks");
             let limit = if self.artist_all_tracks { page.top_tracks.len() } else { 5 };
             for (i, track) in page.top_tracks.iter().take(limit).enumerate() {
-                let ctx = TrackCtx { liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
+                let ctx = TrackCtx { plugin_items: &self.pl.menu, liked: &self.liked_ids, playlists: &self.playlists, playing: self.playing, bars: self.viz };
                 let resp = track_row(
                     ui,
                     &self.textures,
@@ -3487,6 +3530,7 @@ impl App {
     fn now_playing_view(&mut self, ui: &mut egui::Ui) {
         let Some(track) = self.current.clone() else { return };
         let mut close = false;
+        let (hide_lyrics, hide_credits) = (self.plugin_hidden("lyrics"), self.plugin_hidden("credits"));
 
         // top bar: close on the left, tabs on the right, in the look of the header buttons
         ui.horizontal(|ui| {
@@ -3497,12 +3541,24 @@ impl App {
             if resp.on_hover_text("Minimize (Esc)").clicked() {
                 close = true;
             }
+            self.plugin_row_buttons(ui, plugins::Place::Now, 38.0, true);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let selected = if self.now_tab == NowTab::Lyrics { 0 } else { 1 };
-                match ui::segmented(ui, egui::Id::new("now_tabs"), &["Lyrics", "Credits"], selected) {
-                    Some(0) => self.now_tab = NowTab::Lyrics,
-                    Some(_) => self.now_tab = NowTab::Credits,
-                    None => {}
+                // the tabs a plugin has not hidden
+                let mut tabs: Vec<(&str, NowTab)> = Vec::new();
+                if !hide_lyrics {
+                    tabs.push(("Lyrics", NowTab::Lyrics));
+                }
+                if !hide_credits {
+                    tabs.push(("Credits", NowTab::Credits));
+                }
+                if let Some((_, only)) = tabs.first().filter(|_| tabs.len() == 1) {
+                    self.now_tab = *only;
+                } else if tabs.len() == 2 {
+                    let selected = if self.now_tab == NowTab::Lyrics { 0 } else { 1 };
+                    let labels: Vec<&str> = tabs.iter().map(|(l, _)| *l).collect();
+                    if let Some(i) = ui::segmented(ui, egui::Id::new("now_tabs"), &labels, selected) {
+                        self.now_tab = tabs[i].1;
+                    }
                 }
             });
         });
@@ -3572,6 +3628,8 @@ impl App {
         );
         let mut seek_to = None;
         match self.now_tab {
+            NowTab::Lyrics if hide_lyrics => {}
+            NowTab::Credits if hide_credits => {}
             NowTab::Lyrics => seek_to = self.lyrics_panel(&mut side),
             NowTab::Credits => {
                 if open_artist.is_none() {
@@ -3815,17 +3873,39 @@ impl App {
                             egui::Frame::new()
                                 .inner_margin(egui::Margin::symmetric(10, 0))
                                 .show(ui, |ui| {
-                                    for (tab, icon, label) in [
-                                        (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback"),
-                                        (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer"),
-                                        (SettingsTab::Appearance, icons::PALETTE, "Appearance"),
-                                        (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord"),
-                                        (SettingsTab::Overlay, icons::SUBTITLES, "Overlay"),
-                                        (SettingsTab::System, icons::DESKTOP, "System"),
-                                        (SettingsTab::Account, icons::USER_CIRCLE, "Account"),
+                                    for (tab, icon, label, feature) in [
+                                        (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback", ""),
+                                        (SettingsTab::Equalizer, icons::SLIDERS, "Equalizer", "settings.equalizer"),
+                                        (SettingsTab::Appearance, icons::PALETTE, "Appearance", ""),
+                                        (SettingsTab::Discord, icons::DISCORD_LOGO, "Discord", "settings.discord"),
+                                        (SettingsTab::Overlay, icons::SUBTITLES, "Overlay", "settings.overlay"),
+                                        (SettingsTab::System, icons::DESKTOP, "System", ""),
+                                        (SettingsTab::Account, icons::USER_CIRCLE, "Account", "settings.account"),
+                                        (SettingsTab::Plugins, icons::PUZZLE_PIECE, "Plugins", ""),
                                     ] {
+                                        if !feature.is_empty() && self.plugin_hidden(feature) {
+                                            continue;
+                                        }
                                         if nav_item(ui, icon, label, self.settings_tab == tab, None).clicked() {
                                             self.settings_tab = tab;
+                                        }
+                                    }
+                                    // the pages plugins have made
+                                    let pages: Vec<(String, String, String, String)> = if self.plugins_on() {
+                                        self.pl
+                                            .manager
+                                            .categories()
+                                            .into_iter()
+                                            .map(|(p, c)| (p.to_string(), c.id.clone(), c.title.clone(), c.icon.clone()))
+                                            .collect()
+                                    } else {
+                                        Vec::new()
+                                    };
+                                    for (plugin, cat, title, icon) in pages {
+                                        let selected = self.settings_tab == SettingsTab::PluginPage && self.pl.page == Some((plugin.clone(), cat.clone()));
+                                        if nav_item(ui, plugins::registry::icon(&icon), &title, selected, None).clicked() {
+                                            self.settings_tab = SettingsTab::PluginPage;
+                                            self.pl.page = Some((plugin, cat));
                                         }
                                     }
                                 });
@@ -3866,6 +3946,27 @@ impl App {
 
     fn settings_content(&mut self, ui: &mut egui::Ui) {
         match self.settings_tab {
+            SettingsTab::Plugins => return self.plugins_settings(ui),
+            SettingsTab::PluginPage => return self.plugin_page(ui),
+            _ => {}
+        }
+        self.settings_content_inner(ui);
+        let page = match self.settings_tab {
+            SettingsTab::Playback => "playback",
+            SettingsTab::Equalizer => "equalizer",
+            SettingsTab::Appearance => "appearance",
+            SettingsTab::Discord => "discord",
+            SettingsTab::Overlay => "overlay",
+            SettingsTab::System => "system",
+            SettingsTab::Account => "account",
+            SettingsTab::Plugins | SettingsTab::PluginPage => return,
+        };
+        self.plugin_extra_entries(ui, page);
+    }
+
+    fn settings_content_inner(&mut self, ui: &mut egui::Ui) {
+        match self.settings_tab {
+            SettingsTab::Plugins | SettingsTab::PluginPage => {}
             SettingsTab::Playback => {
                 ui.heading("Playback");
                 ui.add_space(8.0);
@@ -3948,6 +4049,7 @@ impl App {
             SettingsTab::Equalizer => self.equalizer_view(ui),
             SettingsTab::Appearance => {
                 ui.heading("Appearance");
+                self.theme_settings(ui);
 
                 settings_group(ui, "Colours");
                 let mut v = self.cfg.theme_from_cover;
@@ -4772,6 +4874,7 @@ fn toast_kind(message: &str) -> (&'static str, Color32) {
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.pl.manager.stop_all();
         self.remember_position();
         self.cfg.save();
     }
@@ -4784,6 +4887,7 @@ impl eframe::App for App {
         self.handle_audio_events();
         self.handle_system(ctx);
         self.handle_updates();
+        self.plugins_frame(ctx);
         self.handle_overlay();
         self.refresh_preload();
         while let Ok(text) = self.link_rx.try_recv() {
@@ -4828,11 +4932,32 @@ impl eframe::App for App {
         } else {
             self.last_palette = None;
         }
-        let target = if self.cfg.cover_backdrop { palette.unwrap_or(ui::DEFAULT_PALETTE) } else { ui::DEFAULT_PALETTE };
-        let target_theme = match palette {
-            Some(p) if self.cfg.theme_from_cover => ui::theme_for(p),
-            _ => ui::Theme::default(),
+        // a theme file sets the colours itself (and with `follow_cover` still follows the cover)
+        let custom = self.custom_theme().cloned();
+        let follow = custom.as_ref().map_or(true, |c| c.follow_cover);
+        let (target, target_theme) = match &custom {
+            Some(c) => {
+                let cover = if c.follow_cover { palette } else { None };
+                let theme = match cover {
+                    Some(p) => {
+                        let t = ui::theme_for(p);
+                        // a grey cover has nothing to follow: the theme's own colours stay
+                        if t.accent == ui::DEFAULT_ACCENT { ui::Theme { light: t.light, ..c.theme() } } else { t }
+                    }
+                    None => c.theme(),
+                };
+                (cover.unwrap_or(c.wallpaper), theme)
+            }
+            None => (
+                if self.cfg.cover_backdrop { palette.unwrap_or(ui::DEFAULT_PALETTE) } else { ui::DEFAULT_PALETTE },
+                match palette {
+                    Some(p) if self.cfg.theme_from_cover => ui::theme_for(p),
+                    _ => ui::Theme::default(),
+                },
+            ),
         };
+        // a theme with fixed colours has no blurred cover behind it
+        let use_cover_backdrop = self.cfg.cover_backdrop && follow;
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
         // The colours glide to the next song's over as long as its cover transition (the
         // crossfade, if there is one) and start with the song, not when the cover arrives.
@@ -4865,7 +4990,7 @@ impl eframe::App for App {
             video,
             self.playing && !self.finished,
             self.cover_flood_secs + 1.5,
-            self.cfg.cover_backdrop,
+            use_cover_backdrop,
         );
         if let (Some(thumb), Some(url)) = (thumb, self.wallpaper_url()) {
             if let Some(tex) = self.blur_tex.get_mut(&url) {
@@ -4884,7 +5009,7 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         let tex = |u: &Option<String>| u.as_ref().and_then(|u| self.blur_tex.get(u)).map(|t| t.id());
-        let backdrop = self.cfg.cover_backdrop;
+        let backdrop = use_cover_backdrop;
         ui::paint_song_wallpaper(
             ctx,
             &self.bg_colors,
@@ -4978,6 +5103,7 @@ impl eframe::App for App {
             });
 
         self.auto_search(ctx);
+        self.plugin_consent_dialog(ctx);
         self.dialog_ui(ctx);
         self.profile_menu(ctx);
         self.settings_modal(ctx);
@@ -5083,6 +5209,8 @@ fn paint_cover_r(
 
 
 enum TrackAction {
+    /// An entry a plugin put into the song menu.
+    Plugin { plugin: String, id: String },
     Play,
     SetLiked(bool),
     AddToPlaylist { uuid: String, title: String },
@@ -5094,6 +5222,7 @@ enum TrackAction {
 }
 
 struct TrackCtx<'a> {
+    plugin_items: &'a [(String, plugins::MenuItem)],
     liked: &'a HashSet<u64>,
     playlists: &'a [Playlist],
     playing: bool,
@@ -5189,6 +5318,7 @@ fn track_menu(
     if let Some(t) = target {
         *action = Some((track.clone(), TrackAction::Share(t)));
     }
+    plugins_ui::menu_entries(ui, ctx.plugin_items, track, action);
 }
 
 /// Hovering "Share" opens one button per service.
@@ -6164,6 +6294,11 @@ mod debug_shot {
                 self.settings_tab = match std::env::var("TIDALFAST_SHOT_TAB").as_deref() {
                     Ok("equalizer") => super::SettingsTab::Equalizer,
                     Ok("appearance") => super::SettingsTab::Appearance,
+                    Ok("plugins") => super::SettingsTab::Plugins,
+                    Ok("page") => {
+                        self.pl.page = Some(("hello".to_string(), "hello".to_string()));
+                        super::SettingsTab::PluginPage
+                    }
                     Ok("discord") => super::SettingsTab::Discord,
                     Ok("overlay") => super::SettingsTab::Overlay,
                     Ok("system") => super::SettingsTab::System,
@@ -6229,6 +6364,21 @@ mod debug_shot {
                 if started.elapsed() > Duration::from_secs(2) && !SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     self.toast = Some((text, Instant::now()));
                 }
+            }
+            if std::env::var_os("TIDALFAST_SHOT_PLUGINS").is_some() && !self.pl.manager.plugins.is_empty() && self.cfg.plugin_cfg.is_empty() {
+                // screenshots: allow every plugin that is in the folder
+                for p in self.pl.manager.plugins.clone() {
+                    self.cfg.plugin_cfg.insert(p.manifest.id.clone(), crate::plugins::consent(&p));
+                }
+                self.pl.dirty = true;
+            }
+            if let Ok(id) = std::env::var("TIDALFAST_SHOT_CONSENT") {
+                if self.pl.consent.is_none() {
+                    self.pl.consent = Some(id);
+                }
+            }
+            if let Ok(id) = std::env::var("TIDALFAST_SHOT_THEME") {
+                self.cfg.theme = id;
             }
             if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
                 self.cfg.fluid_backdrop = true;

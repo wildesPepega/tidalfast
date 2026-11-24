@@ -1,0 +1,8 @@
+name = "Sunset"
+author = "tidalfast"
+description = "Warm orange and rose."
+
+[colors]
+accent = "#ffb86c"
+panel = "#1c1218"
+wallpaper = ["#7a2e3a", "#b5542f", "#5a2a5c"]

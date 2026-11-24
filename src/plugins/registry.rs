@@ -160,6 +160,7 @@ pub fn icon(name: &str) -> &'static str {
 }
 
 /// The icon names plugins can use (for the documentation).
+#[cfg(test)]
 pub const ICON_NAMES: [&str; 44] = [
     "star", "heart", "plus", "minus", "gear", "download", "upload", "music", "play", "pause", "skip-forward", "skip-back", "link", "copy",
     "trash", "info", "warning", "check", "x", "search", "list", "clock", "moon", "sun", "bell", "globe", "code", "palette", "share",

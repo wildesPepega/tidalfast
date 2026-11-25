@@ -85,7 +85,7 @@ cd oxytide
 cargo build --release
 ```
 
-The binary ends up in `target/release/oxytide`. Debug builds have a demo mode for screenshots: `OXYTIDE_DEMO=1` swaps TIDAL for made-up music (use throwaway `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` so your settings stay untouched), `OXYTIDE_SHOT=out.png` with `OXYTIDE_SHOT_OPEN`, `_PLAY`, `_NOW`, `_QUEUE`, `_SEARCH`, `_ARTIST`, `_SETTINGS` and `_TAB` saves a picture of the window. On Linux you need the ALSA development headers (`libasound2-dev` / `alsa-lib`). The Windows build is cross-compiled with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW).
+The binary ends up in `target/release/oxytide`. `oxytide --register` adds the application-menu entry and icon. Debug builds have a demo mode for screenshots: `OXYTIDE_DEMO=1` swaps TIDAL for made-up music (use throwaway `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` so your settings stay untouched), `OXYTIDE_SHOT=out.png` with `OXYTIDE_SHOT_OPEN`, `_PLAY`, `_NOW`, `_QUEUE`, `_SEARCH`, `_ARTIST`, `_SETTINGS` and `_TAB` saves a picture of the window. On Linux you need the ALSA development headers (`libasound2-dev` / `alsa-lib`). The Windows build is cross-compiled with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW).
 
 ## Signing in
 

@@ -50,6 +50,14 @@ fn main() -> eframe::Result<()> {
     // only now: until the old process has quit, Windows keeps its file (`.old`) locked
     update::clean_up();
 
+    // `oxytide --register`: add the menu entry and icon (and take over the old settings), then quit.
+    // Handy after copying the program somewhere by hand.
+    if std::env::args().any(|a| a == "--register") {
+        desktop::set_link_handler(config::Settings::load().link_handler);
+        println!("Oxytide is registered in the application menu.");
+        return Ok(());
+    }
+
     // `oxytide <spotify/tidal link>`: hand over to a running instance if there is one.
     let link_arg = std::env::args().skip(1).find(|a| link::parse(a).is_some());
     // screenshot runs (debug builds) stay out of a running instance's way

@@ -1,4 +1,4 @@
-//! Debug builds only: `TIDALFAST_DEMO=1` replaces the network with made-up
+//! Debug builds only: `OXYTIDE_DEMO=1` replaces the network with made-up
 //! music (invented artists, albums, playlists, lyrics and generated cover art)
 //! so the app can be photographed for the README without anyone's account.
 
@@ -13,7 +13,7 @@ use crate::model::{Album, Artist, ArtistPage, CreditGroup, Lyrics, Playlist, Pla
 use crate::net::{Cmd, Ev};
 
 pub fn enabled() -> bool {
-    std::env::var_os("TIDALFAST_DEMO").is_some()
+    std::env::var_os("OXYTIDE_DEMO").is_some()
 }
 
 /// The settings of the demo person: signed in, nothing that talks to the outside.
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(a.as_raw(), b.as_raw(), "same art at every size");
         let c = cover_art("https://resources.tidal.com/images/c0000002/x/320x320.jpg", 64);
         assert_ne!(a.as_raw(), c.as_raw());
-        if let Some(dir) = std::env::var_os("TIDALFAST_DEMO_DUMP") {
+        if let Some(dir) = std::env::var_os("OXYTIDE_DEMO_DUMP") {
             for n in 0..12u64 {
                 cover_art(&format!("https://resources.tidal.com/images/{}/320x320.jpg", cover_id('c', 9000 + n)), 200)
                     .save(std::path::Path::new(&dir).join(format!("cover{n}.png")))
@@ -484,10 +484,10 @@ mod tests {
         }
     }
 
-    /// With `TIDALFAST_DEMO_DUMP=<dir>`: the overlay card for the demo's current song, as a PNG with transparency.
+    /// With `OXYTIDE_DEMO_DUMP=<dir>`: the overlay card for the demo's current song, as a PNG with transparency.
     #[test]
     fn dumps_the_overlay_card() {
-        let Some(dir) = std::env::var_os("TIDALFAST_DEMO_DUMP") else { return };
+        let Some(dir) = std::env::var_os("OXYTIDE_DEMO_DUMP") else { return };
         let tracks = tracks_for("demo-late-night");
         let (now, next) = (&tracks[1], &tracks[2]);
         let cover = cover_art(&now.cover_url(320).unwrap(), crate::card::COVER_PX);

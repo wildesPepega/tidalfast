@@ -189,7 +189,7 @@ mod tests {
         assert!(card.pixels[mid + 3] > 150, "background is mostly opaque");
         // some text pixels are brighter than the background
         assert!(card.pixels.chunks(4).any(|p| p[0] > 200 && p[3] > 200));
-        if let Some(dir) = std::env::var_os("TIDALFAST_CARD_DUMP") {
+        if let Some(dir) = std::env::var_os("OXYTIDE_CARD_DUMP") {
             let img = RgbaImage::from_raw(card.width, card.height, card.pixels.clone()).unwrap();
             img.save(std::path::Path::new(&dir).join("card.png")).unwrap();
             std::fs::write(std::path::Path::new(&dir).join("card.rgba"), &card.pixels).unwrap();

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-const SCRIPT_NAME: &str = "tidalfast-window";
+const SCRIPT_NAME: &str = "oxytide-window";
 
 /// Serializes the (slow) D-Bus round trips, so a hide followed by a show cannot overtake each other.
 static BUSY: Mutex<()> = Mutex::new(());
@@ -64,7 +64,7 @@ fn script(hidden: bool) -> String {
 }
 
 fn script_path() -> PathBuf {
-    dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("tidalfast-window.js")
+    dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("oxytide-window.js")
 }
 
 /// Call a method over D-Bus with whichever command line tool exists; the reply as text.

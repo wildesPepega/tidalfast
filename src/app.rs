@@ -425,7 +425,7 @@ impl App {
             current_artist: None,
             artist_pages: HashMap::new(),
             artist_all_tracks: false,
-            link_rx: if cfg!(debug_assertions) && std::env::var_os("TIDALFAST_SHOT").is_some() {
+            link_rx: if cfg!(debug_assertions) && std::env::var_os("OXYTIDE_SHOT").is_some() {
                 std::sync::mpsc::channel().1
             } else {
                 crate::ipc::listen(cc.egui_ctx.clone())
@@ -1599,7 +1599,7 @@ impl App {
         let id = track.album.as_ref()?.video_cover.clone()?;
         #[cfg(debug_assertions)]
         if crate::demo::enabled() {
-            return std::env::var("TIDALFAST_DEMO_VIDEO").ok().map(|p| format!("file://{p}"));
+            return std::env::var("OXYTIDE_DEMO_VIDEO").ok().map(|p| format!("file://{p}"));
         }
         Some(crate::animcover::video_url(&id, 640))
     }
@@ -1691,9 +1691,9 @@ impl App {
                             let auto = self.cfg.auto_update && release.asset.is_some() && update::cannot_self_update().is_none();
                             if announce {
                                 let note = if auto {
-                                    format!("Downloading tidalfast {}…", release.version)
+                                    format!("Downloading Oxytide {}…", release.version)
                                 } else {
-                                    format!("tidalfast {} is available – see Settings → System", release.version)
+                                    format!("Oxytide {} is available – see Settings → System", release.version)
                                 };
                                 self.toast(note);
                             }
@@ -1706,7 +1706,7 @@ impl App {
                             self.update.available = None;
                             self.update.status = UpdateStatus::UpToDate;
                             if manual {
-                                self.toast(format!("tidalfast {} is up to date", update::VERSION));
+                                self.toast(format!("Oxytide {} is up to date", update::VERSION));
                             }
                         }
                         Err(e) => {
@@ -1717,7 +1717,7 @@ impl App {
                 UpdateEv::Progress(p) => self.update.status = UpdateStatus::Downloading(p),
                 UpdateEv::Installed => {
                     self.update.status = UpdateStatus::Installed;
-                    self.toast("Update installed – restart tidalfast to use it".into());
+                    self.toast("Update installed – restart Oxytide to use it".into());
                 }
                 UpdateEv::InstallFailed(e) => {
                     self.update.status = UpdateStatus::Failed(e.clone());
@@ -4424,7 +4424,7 @@ impl App {
                 }
                 ui.label(
                     RichText::new(
-                        "Control tidalfast with your media keys and show the current track in your desktop's \
+                        "Control Oxytide with your media keys and show the current track in your desktop's \
                          media widgets (KDE, GNOME, Waybar, playerctl …) or the Windows media overlay.",
                     )
                     .color(TEXT_DIM),
@@ -4461,20 +4461,20 @@ impl App {
                     self.touch();
                 }
                 ui.label(
-                    RichText::new("Closing the window only hides tidalfast; the music keeps playing. “Quit” in the tray menu exits the app.")
+                    RichText::new("Closing the window only hides Oxytide; the music keeps playing. “Quit” in the tray menu exits the app.")
                         .color(TEXT_DIM),
                 );
 
                 ui.add_space(14.0);
                 let mut handler = self.cfg.link_handler;
-                if ui::checkbox(ui, &mut handler, "Open spotify: and tidal: links in tidalfast").changed() {
+                if ui::checkbox(ui, &mut handler, "Open spotify: and tidal: links in Oxytide").changed() {
                     self.cfg.link_handler = handler;
                     std::thread::spawn(move || crate::desktop::set_link_handler(handler));
                     self.touch();
                 }
                 ui.label(
                     RichText::new(
-                        "Browsers then ask whether to open such links in tidalfast. Normal web addresses \
+                        "Browsers then ask whether to open such links in Oxytide. Normal web addresses \
                          (https://open.spotify.com/…, https://tidal.com/…) always open in the browser, as no app can \
                          intercept them – copy them into the search field instead.",
                     )
@@ -4498,7 +4498,7 @@ impl App {
                 }
                 ui.add_space(24.0);
                 ui.label(
-                    RichText::new(format!("tidalfast {}", env!("CARGO_PKG_VERSION")))
+                    RichText::new(format!("Oxytide {}", env!("CARGO_PKG_VERSION")))
                         .size(12.0)
                         .color(TEXT_DIM),
                 );
@@ -4513,7 +4513,7 @@ impl App {
                     ui.label(RichText::new(".").size(12.0).color(TEXT_DIM));
                 });
                 ui.label(
-                    RichText::new("tidalfast is free software under the GNU GPL v3.")
+                    RichText::new("Oxytide is free software under the GNU GPL v3.")
                         .size(12.0)
                         .color(TEXT_DIM),
                 );
@@ -4524,7 +4524,7 @@ impl App {
     fn update_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Updates");
         ui.add_space(8.0);
-        ui.label(RichText::new(format!("tidalfast {}", update::VERSION)).strong());
+        ui.label(RichText::new(format!("Oxytide {}", update::VERSION)).strong());
         ui.add_space(6.0);
 
         let mut check = self.cfg.check_updates;
@@ -4663,7 +4663,7 @@ impl App {
         let total = self.cache_total.map_or(0, |(s, _)| s);
         ui.label(
             RichText::new(format!(
-                "Songs, covers and lists that tidalfast keeps to start fast: {}. Nothing in it is needed; it is made again as you listen.",
+                "Songs, covers and lists that Oxytide keeps to start fast: {}. Nothing in it is needed; it is made again as you listen.",
                 human_bytes(total)
             ))
             .size(12.5)
@@ -4766,7 +4766,7 @@ impl App {
             );
         }
         ui.add_space(14.0);
-        login::title(ui, "tidalfast", 38.0);
+        login::title(ui, "Oxytide", 38.0);
         ui.add_space(4.0);
         login::title(ui, "A fast, native TIDAL client", 15.5);
         ui.add_space(34.0);
@@ -6196,9 +6196,9 @@ pub(crate) fn open_url(url: &str) {
     }
 }
 
-/// Debug builds only: `TIDALFAST_SHOT=out.png` saves a screenshot of the app
-/// window after a few seconds and quits. `TIDALFAST_SHOT_SEARCH=<text>` types
-/// a search first; `TIDALFAST_SHOT_SETTINGS`, `_NOW` and `_QUEUE` open the
+/// Debug builds only: `OXYTIDE_SHOT=out.png` saves a screenshot of the app
+/// window after a few seconds and quits. `OXYTIDE_SHOT_SEARCH=<text>` types
+/// a search first; `OXYTIDE_SHOT_SETTINGS`, `_NOW` and `_QUEUE` open the
 /// settings, the full-screen player and the queue; `_PLAY` pretends to play,
 /// `_ARTIST=<id>` opens an artist page and `_PROFILE` the profile menu.
 #[cfg(debug_assertions)]
@@ -6215,20 +6215,20 @@ mod debug_shot {
         pub now: bool,
         pub queue: bool,
         pub play: bool,
-        /// `TIDALFAST_SHOT_OPEN=<n>`: open the n-th playlist of the library (0 = liked songs).
+        /// `OXYTIDE_SHOT_OPEN=<n>`: open the n-th playlist of the library (0 = liked songs).
         pub open: Option<usize>,
-        /// `TIDALFAST_SHOT_AT=<seconds>`: where in the song the demo pretends to be.
+        /// `OXYTIDE_SHOT_AT=<seconds>`: where in the song the demo pretends to be.
         pub at: f64,
         pub started_play: bool,
-        /// `TIDALFAST_SHOT_MOUSE=0.8,0.3`: the mouse over the full-screen cover, as a fraction of it.
+        /// `OXYTIDE_SHOT_MOUSE=0.8,0.3`: the mouse over the full-screen cover, as a fraction of it.
         pub mouse: Option<(f32, f32)>,
-        /// `TIDALFAST_SHOT_SKIP=<seconds>`: skip to the next song after this long (shows the liquid).
+        /// `OXYTIDE_SHOT_SKIP=<seconds>`: skip to the next song after this long (shows the liquid).
         pub skip_at: Option<f32>,
         pub skipped: bool,
         pub skip_by: usize,
         pub artist: Option<u64>,
         pub profile: bool,
-        /// `TIDALFAST_SHOT_SIDEBAR=open|closed`
+        /// `OXYTIDE_SHOT_SIDEBAR=open|closed`
         pub sidebar: Option<bool>,
         pub started: Option<Instant>,
         pub requested: bool,
@@ -6238,23 +6238,23 @@ mod debug_shot {
     impl Shot {
         pub fn from_env() -> Self {
             Self {
-                path: std::env::var("TIDALFAST_SHOT").ok(),
-                search: std::env::var("TIDALFAST_SHOT_SEARCH").ok(),
-                settings: std::env::var("TIDALFAST_SHOT_SETTINGS").is_ok(),
-                now: std::env::var("TIDALFAST_SHOT_NOW").is_ok(),
-                queue: std::env::var("TIDALFAST_SHOT_QUEUE").is_ok(),
-                play: std::env::var("TIDALFAST_SHOT_PLAY").is_ok(),
-                open: std::env::var("TIDALFAST_SHOT_OPEN").ok().and_then(|v| v.parse().ok()),
-                mouse: std::env::var("TIDALFAST_SHOT_MOUSE").ok().and_then(|v| {
+                path: std::env::var("OXYTIDE_SHOT").ok(),
+                search: std::env::var("OXYTIDE_SHOT_SEARCH").ok(),
+                settings: std::env::var("OXYTIDE_SHOT_SETTINGS").is_ok(),
+                now: std::env::var("OXYTIDE_SHOT_NOW").is_ok(),
+                queue: std::env::var("OXYTIDE_SHOT_QUEUE").is_ok(),
+                play: std::env::var("OXYTIDE_SHOT_PLAY").is_ok(),
+                open: std::env::var("OXYTIDE_SHOT_OPEN").ok().and_then(|v| v.parse().ok()),
+                mouse: std::env::var("OXYTIDE_SHOT_MOUSE").ok().and_then(|v| {
                     let (a, b) = v.split_once(',')?;
                     Some((a.parse().ok()?, b.parse().ok()?))
                 }),
-                skip_by: std::env::var("TIDALFAST_SHOT_SKIPBY").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
-                skip_at: std::env::var("TIDALFAST_SHOT_SKIP").ok().and_then(|v| v.parse().ok()),
-                at: std::env::var("TIDALFAST_SHOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
-                artist: std::env::var("TIDALFAST_SHOT_ARTIST").ok().and_then(|v| v.parse().ok()),
-                profile: std::env::var("TIDALFAST_SHOT_PROFILE").is_ok(),
-                sidebar: std::env::var("TIDALFAST_SHOT_SIDEBAR").ok().map(|v| v == "open"),
+                skip_by: std::env::var("OXYTIDE_SHOT_SKIPBY").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
+                skip_at: std::env::var("OXYTIDE_SHOT_SKIP").ok().and_then(|v| v.parse().ok()),
+                at: std::env::var("OXYTIDE_SHOT_AT").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                artist: std::env::var("OXYTIDE_SHOT_ARTIST").ok().and_then(|v| v.parse().ok()),
+                profile: std::env::var("OXYTIDE_SHOT_PROFILE").is_ok(),
+                sidebar: std::env::var("OXYTIDE_SHOT_SIDEBAR").ok().map(|v| v == "open"),
                 ..Default::default()
             }
         }
@@ -6274,7 +6274,7 @@ mod debug_shot {
                     self.perform_search(false);
                     ctx.memory_mut(|m| m.request_focus(egui::Id::new("search_field")));
                 }
-                if let Ok(mode) = std::env::var("TIDALFAST_SHOT_LOGIN") {
+                if let Ok(mode) = std::env::var("OXYTIDE_SHOT_LOGIN") {
                     // the sign-in screen (`code`: with a device code, `busy`: preparing)
                     self.user = None;
                     self.login_busy = mode == "busy";
@@ -6286,12 +6286,12 @@ mod debug_shot {
                         });
                     }
                 }
-                if std::env::var_os("TIDALFAST_SHOT_EDIT").is_some() {
+                if std::env::var_os("OXYTIDE_SHOT_EDIT").is_some() {
                     if let Some(pl) = self.playlists.iter().find(|p| p.uuid != super::LIKED_UUID).cloned() {
                         self.apply_pl_action(pl, super::PlAction::Edit);
                     }
                 }
-                self.settings_tab = match std::env::var("TIDALFAST_SHOT_TAB").as_deref() {
+                self.settings_tab = match std::env::var("OXYTIDE_SHOT_TAB").as_deref() {
                     Ok("equalizer") => super::SettingsTab::Equalizer,
                     Ok("appearance") => super::SettingsTab::Appearance,
                     Ok("plugins") => super::SettingsTab::Plugins,
@@ -6347,40 +6347,40 @@ mod debug_shot {
                     self.now_quality = "HI_RES_LOSSLESS".into();
                 }
             }
-            if let Ok(n) = std::env::var("TIDALFAST_SHOT_EFFECT").unwrap_or_default().parse::<usize>() {
+            if let Ok(n) = std::env::var("OXYTIDE_SHOT_EFFECT").unwrap_or_default().parse::<usize>() {
                 self.cfg.cover_effect = crate::cover3d::CoverEffect::ALL[n % crate::cover3d::CoverEffect::ALL.len()];
             }
-            if std::env::var_os("TIDALFAST_SHOT_UPDATE").is_some() && self.update.available.is_none() {
+            if std::env::var_os("OXYTIDE_SHOT_UPDATE").is_some() && self.update.available.is_none() {
                 // an update with release notes (screenshots of the update dialog)
                 self.update.available = Some(crate::update::Release {
                     version: "9.9.9".into(),
-                    notes: "## New\n- **Ink** cover transition: ink drops into the old cover and spreads in dark tendrils.\n- *Reflection* under the cover, plus a [holo foil](https://example.com) sheen.\n  - nested point with `inline code`\n- [x] Done thing\n- [ ] Open thing\n\n## Fixes\n1. The wave runs to the end.\n2. ~~Old bug~~ fixed.\n\n> Optional: switch the new effects off in Settings → Appearance.\n\n```\ntidalfast --version\n```\n\n| Platform | File |\n|---|---|\n| Linux | tidalfast-linux-x86_64 |\n| Windows | tidalfast-windows-x86_64.exe |\n".into(),
+                    notes: "## New\n- **Ink** cover transition: ink drops into the old cover and spreads in dark tendrils.\n- *Reflection* under the cover, plus a [holo foil](https://example.com) sheen.\n  - nested point with `inline code`\n- [x] Done thing\n- [ ] Open thing\n\n## Fixes\n1. The wave runs to the end.\n2. ~~Old bug~~ fixed.\n\n> Optional: switch the new effects off in Settings → Appearance.\n\n```\noxytide --version\n```\n\n| Platform | File |\n|---|---|\n| Linux | oxytide-linux-x86_64 |\n| Windows | oxytide-windows-x86_64.exe |\n".into(),
                     page: "https://example.com".into(),
                     asset: None,
                 });
             }
-            if let Ok(text) = std::env::var("TIDALFAST_SHOT_TOAST") {
+            if let Ok(text) = std::env::var("OXYTIDE_SHOT_TOAST") {
                 static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
                 if started.elapsed() > Duration::from_secs(2) && !SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     self.toast = Some((text, Instant::now()));
                 }
             }
-            if std::env::var_os("TIDALFAST_SHOT_PLUGINS").is_some() && !self.pl.manager.plugins.is_empty() && self.cfg.plugin_cfg.is_empty() {
+            if std::env::var_os("OXYTIDE_SHOT_PLUGINS").is_some() && !self.pl.manager.plugins.is_empty() && self.cfg.plugin_cfg.is_empty() {
                 // screenshots: allow every plugin that is in the folder
                 for p in self.pl.manager.plugins.clone() {
                     self.cfg.plugin_cfg.insert(p.manifest.id.clone(), crate::plugins::consent(&p));
                 }
                 self.pl.dirty = true;
             }
-            if let Ok(id) = std::env::var("TIDALFAST_SHOT_CONSENT") {
+            if let Ok(id) = std::env::var("OXYTIDE_SHOT_CONSENT") {
                 if self.pl.consent.is_none() {
                     self.pl.consent = Some(id);
                 }
             }
-            if let Ok(id) = std::env::var("TIDALFAST_SHOT_THEME") {
+            if let Ok(id) = std::env::var("OXYTIDE_SHOT_THEME") {
                 self.cfg.theme = id;
             }
-            if std::env::var_os("TIDALFAST_SHOT_FLUID").is_some() {
+            if std::env::var_os("OXYTIDE_SHOT_FLUID").is_some() {
                 self.cfg.fluid_backdrop = true;
             }
             if let Some((x, y)) = self.shot.mouse {
@@ -6411,7 +6411,7 @@ mod debug_shot {
                 ctx.request_repaint_after(Duration::from_millis(100));
                 return;
             };
-            let wait = std::env::var("TIDALFAST_SHOT_WAIT").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(6);
+            let wait = std::env::var("OXYTIDE_SHOT_WAIT").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(6);
             if !self.shot.requested && started.elapsed() > Duration::from_secs(wait) {
                 self.shot.requested = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));

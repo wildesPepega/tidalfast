@@ -794,7 +794,7 @@ pub fn cached_cover(url: &str) -> Option<Vec<u8>> {
 const CACHE_LIMIT_BYTES: u64 = 400 * 1024 * 1024;
 
 pub fn cache_dir() -> Option<std::path::PathBuf> {
-    dirs::cache_dir().map(|d| d.join("tidalfast").join("covers"))
+    dirs::cache_dir().map(|d| d.join("oxytide").join("covers"))
 }
 
 /// Stable file name for a URL (FNV-1a, hex).

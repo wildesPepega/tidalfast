@@ -167,7 +167,7 @@ pub fn parse(text: &str) -> Result<Manifest, String> {
         return Err("id: use 1–40 small letters, digits, - and _".into());
     }
     if raw.api != API_VERSION {
-        return Err(format!("this plugin is for interface version {}, tidalfast speaks version {API_VERSION}", raw.api));
+        return Err(format!("this plugin is for interface version {}, Oxytide speaks version {API_VERSION}", raw.api));
     }
     if raw.name.trim().is_empty() {
         return Err("name is empty".into());

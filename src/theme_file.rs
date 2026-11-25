@@ -1,7 +1,7 @@
 //! Themes made by users: a small TOML file in the `themes` folder next to the settings.
 //! See `API.md` for the format.
 //!
-//! A theme is only colours (no code), so it cannot do anything but change how tidalfast looks.
+//! A theme is only colours (no code), so it cannot do anything but change how oxytide looks.
 //! The panels are always dark glass; a theme picks the accent, the tint of the glass and the colours
 //! of the wallpaper. Colours that would be hard to read are corrected.
 
@@ -55,7 +55,7 @@ impl CustomTheme {
 }
 
 pub fn themes_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("tidalfast").join("themes")
+    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("oxytide").join("themes")
 }
 
 /// `#rgb` or `#rrggbb`.
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn finds_themes_and_names_the_broken_ones() {
-        let dir = std::env::temp_dir().join(format!("tidalfast-themes-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("oxytide-themes-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("good.toml"), MINIMAL).unwrap();
         std::fs::write(dir.join("bad.toml"), "name = \"x\"\n[colors]\naccent = \"nope\"\n").unwrap();

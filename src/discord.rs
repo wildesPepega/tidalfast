@@ -13,7 +13,7 @@ use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 
 use crate::presence::{render, DiscordFormat, Info};
 
-/// Discord application id of tidalfast.
+/// Discord application id of oxytide.
 const APP_ID: &str = "1562542679034961980";
 
 /// Commands arriving within this window are published together.
@@ -94,7 +94,7 @@ impl Discord {
     pub fn spawn(enabled: bool) -> Self {
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
-            .name("tidalfast-discord".into())
+            .name("oxytide-discord".into())
             .spawn(move || Worker::new(enabled).run(rx))
             .expect("spawn discord thread");
         Self { tx }

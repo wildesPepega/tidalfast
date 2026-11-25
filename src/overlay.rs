@@ -223,7 +223,7 @@ fn handle(mut stream: TcpStream, shared: &Mutex<Shared>) -> std::io::Result<()> 
         _ => true,
     };
     if !allowed {
-        return respond(&mut stream, "404 Not Found", "application/json", r#"{"error":"switched off in tidalfast's settings"}"#);
+        return respond(&mut stream, "404 Not Found", "application/json", r#"{"error":"switched off in Oxytide's settings"}"#);
     }
     match path {
         "/" | "/index.html" => respond(&mut stream, "200 OK", "text/html; charset=utf-8", PAGE),

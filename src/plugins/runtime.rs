@@ -263,7 +263,7 @@ fn http_get(url: &str, hosts: &[String]) -> Result<(u16, String), String> {
             .timeout(Duration::from_secs(8))
             .redirect(reqwest::redirect::Policy::none())
             .resolve_to_addrs(&host, &addrs)
-            .user_agent(concat!("tidalfast-plugin/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("oxytide-plugin/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| e.to_string())?;
         let resp = client.get(url.clone()).send().map_err(|e| e.to_string())?;
@@ -573,7 +573,7 @@ fn build_engine(ctx: &Ctx, deadline: Arc<AtomicU64>, started: Instant) -> Engine
     }
     e.register_static_module("settings", m.into());
 
-    // ---- storage (kept on disk) and state (kept while tidalfast runs)
+    // ---- storage (kept on disk) and state (kept while oxytide runs)
     let mut m = Module::new();
     {
         let c = ctx.clone();
@@ -962,7 +962,7 @@ mod tests {
     }
 
     fn start(script: &str, caps: &[Permission], hosts: &[&str]) -> Run {
-        let dir = std::env::temp_dir().join(format!("tidalfast-plugin-test-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst)));
+        let dir = std::env::temp_dir().join(format!("oxytide-plugin-test-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst)));
         let (out, rx) = channel();
         let shared = Arc::new(Mutex::new(Shared { track: Some(serde_json::json!({"title": "Song", "artist": "Band"})), position: 12.5, playing: true, volume: 0.5 }));
         let host = Host {

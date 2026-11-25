@@ -3179,6 +3179,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxytide"
+version = "0.7.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20 0.9.1",
+ "cpal",
+ "dirs",
+ "discord-rich-presence",
+ "eframe",
+ "egui",
+ "egui-phosphor",
+ "env_logger",
+ "image",
+ "ksni",
+ "log",
+ "md5",
+ "mp4",
+ "openh264",
+ "pulldown-cmark",
+ "raw-window-handle",
+ "reqwest",
+ "rfd",
+ "rhai",
+ "rodio",
+ "serde",
+ "serde_json",
+ "sha2",
+ "souvlaki",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tray-icon",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4529,43 +4566,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
-]
-
-[[package]]
-name = "tidalfast"
-version = "0.6.17"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "base64 0.22.1",
- "chacha20 0.9.1",
- "cpal",
- "dirs",
- "discord-rich-presence",
- "eframe",
- "egui",
- "egui-phosphor",
- "env_logger",
- "image",
- "ksni",
- "log",
- "md5",
- "mp4",
- "openh264",
- "pulldown-cmark",
- "raw-window-handle",
- "reqwest",
- "rfd",
- "rhai",
- "rodio",
- "serde",
- "serde_json",
- "sha2",
- "souvlaki",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "tray-icon",
 ]
 
 [[package]]

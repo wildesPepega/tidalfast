@@ -1,4 +1,4 @@
-//! Plugins: small scripts that add to tidalfast (buttons, menu entries, settings, behaviour) and run
+//! Plugins: small scripts that add to oxytide (buttons, menu entries, settings, behaviour) and run
 //! in a sandbox. See `API.md` for what a plugin can do and the security rules it lives by.
 //!
 //! * A plugin is a folder in `plugins/` next to the settings: `plugin.toml` and `main.rhai`.
@@ -49,11 +49,11 @@ pub struct Plugin {
 }
 
 pub fn plugins_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("tidalfast").join("plugins")
+    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("oxytide").join("plugins")
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("tidalfast").join("plugin-data")
+    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("oxytide").join("plugin-data")
 }
 
 pub fn hash_of(manifest_text: &str, script: &str) -> String {
@@ -359,7 +359,7 @@ mod tests {
     static N: AtomicU32 = AtomicU32::new(0);
 
     fn temp() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tidalfast-plugins-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let d = std::env::temp_dir().join(format!("oxytide-plugins-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

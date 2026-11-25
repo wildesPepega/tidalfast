@@ -1,4 +1,4 @@
-//! Single-instance support: a second `tidalfast <link>` hands its argument to
+//! Single-instance support: a second `oxytide <link>` hands its argument to
 //! the running instance instead of opening another window.
 
 use std::sync::mpsc::Receiver;
@@ -13,7 +13,7 @@ mod imp {
     fn socket_path() -> PathBuf {
         dirs::runtime_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("tidalfast.sock")
+            .join("oxytide.sock")
     }
 
     /// Send `message` to a running instance. True if one took it.

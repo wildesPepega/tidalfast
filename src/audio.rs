@@ -96,7 +96,7 @@ impl Audio {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (ev_tx, ev_rx) = mpsc::channel();
         std::thread::Builder::new()
-            .name("tidalfast-audio".into())
+            .name("oxytide-audio".into())
             .spawn(move || audio_thread(cmd_rx, ev_tx, volume, device, eq, transition))
             .expect("spawn audio thread");
         Self {
@@ -700,7 +700,7 @@ fn fetch(url: &str, track_id: u64, quality: &str) -> Result<Vec<u8>> {
 
 fn download(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("tidalfast/0.1")
+        .user_agent("oxytide/0.1")
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(180))
         .build()?;
@@ -738,7 +738,7 @@ mod cache_tests {
 
     #[test]
     fn a_downloaded_song_is_kept_and_found_again() {
-        let dir = std::env::temp_dir().join(format!("tidalfast-fetch-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("oxytide-fetch-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("XDG_CACHE_HOME", &dir);
         // (the key of this installation is made next to the settings: keep the real ones out of it)

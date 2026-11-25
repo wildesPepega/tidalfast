@@ -1,5 +1,5 @@
 name = "Cover, blue when idle"
-author = "tidalfast"
+author = "oxytide"
 description = "Follows the cover of the playing song; these blue colours are used when there is nothing to follow."
 follow_cover = true
 

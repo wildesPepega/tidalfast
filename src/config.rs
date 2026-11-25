@@ -31,7 +31,7 @@ pub struct Settings {
     pub media_keys: bool,
     /// Tray icon.
     pub tray: bool,
-    /// Handle `spotify:` and `tidal:` links (browsers offer to open them in tidalfast).
+    /// Handle `spotify:` and `tidal:` links (browsers offer to open them in oxytide).
     pub link_handler: bool,
     /// Colour the interface (accent, panels, menus) after the playing song's cover.
     pub theme_from_cover: bool,
@@ -74,7 +74,7 @@ pub struct Settings {
     pub check_updates: bool,
     /// Download and install new versions without asking.
     pub auto_update: bool,
-    /// Closing the window keeps tidalfast running in the tray.
+    /// Closing the window keeps oxytide running in the tray.
     pub close_to_tray: bool,
     /// How one track leads into the next.
     pub transition: TransitionMode,
@@ -173,7 +173,7 @@ impl Settings {
     fn path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("tidalfast")
+            .join("oxytide")
             .join("settings.json")
     }
 

@@ -6,11 +6,11 @@
 # Undo with: ./install.sh --remove
 set -e
 cd "$(dirname "$0")"
-dest="${XDG_DATA_HOME:-$HOME/.local/share}/tidalfast/gsr"
+dest="${XDG_DATA_HOME:-$HOME/.local/share}/oxytide/gsr"
 wrapper="$HOME/.local/bin/gpu-screen-recorder"
 
 if [ "$1" = "--remove" ]; then
-    if grep -q tidalfast_overlay "$wrapper" 2>/dev/null; then rm -f "$wrapper"; fi
+    if grep -q -e oxytide_overlay -e tidalfast_overlay "$wrapper" 2>/dev/null; then rm -f "$wrapper"; fi
     rm -rf "$dest"
     echo "removed"
     exit 0
@@ -20,16 +20,16 @@ real=$(PATH=$(echo "$PATH" | sed "s|$HOME/.local/bin:\?||g") command -v gpu-scre
     echo "gpu-screen-recorder not found" >&2; exit 1; }
 make -s
 mkdir -p "$dest" "$HOME/.local/bin"
-install -m 755 tidalfast_overlay.so "$dest/tidalfast_overlay.so"
+install -m 755 oxytide_overlay.so "$dest/oxytide_overlay.so"
 cat > "$wrapper" <<WRAP
 #!/bin/sh
-# written by tidalfast's gsr-plugin/install.sh: loads the now-playing overlay
+# written by oxytide's gsr-plugin/install.sh: loads the now-playing overlay
 case "\$*" in
   *--list*|*--version*|*-h*|*--help*) exec "$real" "\$@" ;;
 esac
-exec "$real" "\$@" -p "$dest/tidalfast_overlay.so"
+exec "$real" "\$@" -p "$dest/oxytide_overlay.so"
 WRAP
 chmod 755 "$wrapper"
-echo "installed: $dest/tidalfast_overlay.so"
+echo "installed: $dest/oxytide_overlay.so"
 echo "wrapper:   $wrapper -> $real"
-echo "Switch the overlay on in tidalfast: Settings -> Overlay."
+echo "Switch the overlay on in oxytide: Settings -> Overlay."

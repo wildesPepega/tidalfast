@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::{de::DeserializeOwned, Serialize};
 
 pub fn dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("tidalfast").join("data"))
+    dirs::cache_dir().map(|d| d.join("oxytide").join("data"))
 }
 
 fn file(name: &str) -> Option<PathBuf> {

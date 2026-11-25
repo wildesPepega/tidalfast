@@ -31,13 +31,13 @@ pub fn enabled() -> bool {
 
 /// The cache in the user's cache folder.
 pub fn global() -> Option<Cache> {
-    let dir = dirs::cache_dir()?.join("tidalfast").join("audio");
+    let dir = dirs::cache_dir()?.join("oxytide").join("audio");
     Some(Cache { dir, key: install_key()? })
 }
 
 /// Where the songs are kept.
 pub fn dir() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("tidalfast").join("audio"))
+    dirs::cache_dir().map(|d| d.join("oxytide").join("audio"))
 }
 
 pub struct Cache {
@@ -55,7 +55,7 @@ const HEADER_LEN: usize = 4 + NONCE_LEN + TAG_LEN;
 fn install_key() -> Option<[u8; 32]> {
     static KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
     *KEY.get_or_init(|| {
-        let path = dirs::config_dir()?.join("tidalfast").join("cache.key");
+        let path = dirs::config_dir()?.join("oxytide").join("cache.key");
         if let Ok(bytes) = fs::read(&path) {
             if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
                 return Some(key);
@@ -94,7 +94,7 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 fn tag(key: &[u8; 32], nonce: &[u8; NONCE_LEN]) -> [u8; TAG_LEN] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"tidalfast cache tag");
+    hasher.update(b"oxytide cache tag");
     hasher.update(key);
     hasher.update(nonce);
     let digest = hasher.finalize();
@@ -242,7 +242,7 @@ impl Cache {
 /// A scratch folder that disappears again (for the tests).
 #[cfg(test)]
 pub fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tidalfast-audio-test-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("oxytide-audio-test-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     dir
 }

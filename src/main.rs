@@ -1,5 +1,5 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
-//! tidalfast — a simple, native TIDAL client built with egui.
+//! oxytide — a simple, native TIDAL client built with egui.
 
 mod animcover;
 mod app;
@@ -21,6 +21,7 @@ mod kwin;
 mod link;
 mod markdown;
 mod login;
+mod migrate;
 mod plugins;
 mod lyrics;
 mod model;
@@ -36,23 +37,26 @@ mod ui;
 mod update;
 
 fn main() -> eframe::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,tidalfast=info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,oxytide=info")).init();
 
     // a freshly updated copy starts a moment after the old one quits
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(ms) = args.iter().position(|a| a == "--delay-start").and_then(|i| args.get(i + 1)?.parse::<u64>().ok()) {
         std::thread::sleep(std::time::Duration::from_millis(ms.min(10_000)));
     }
+    // the program was called "tidalfast" before: take over the old settings and cache (first start only).
+    // After the wait above, so a running old copy has saved its last settings.
+    migrate::run();
     // only now: until the old process has quit, Windows keeps its file (`.old`) locked
     update::clean_up();
 
-    // `tidalfast <spotify/tidal link>`: hand over to a running instance if there is one.
+    // `oxytide <spotify/tidal link>`: hand over to a running instance if there is one.
     let link_arg = std::env::args().skip(1).find(|a| link::parse(a).is_some());
     // screenshot runs (debug builds) stay out of a running instance's way
     let screenshot = cfg!(debug_assertions)
-        && (std::env::var_os("TIDALFAST_SHOT").is_some()
+        && (std::env::var_os("OXYTIDE_SHOT").is_some()
            
-            || std::env::var_os("TIDALFAST_DEMO").is_some());
+            || std::env::var_os("OXYTIDE_DEMO").is_some());
     if !screenshot {
         if ipc::forward(link_arg.as_deref().unwrap_or("focus")) {
             return Ok(());
@@ -63,9 +67,9 @@ fn main() -> eframe::Result<()> {
 
     #[allow(unused_mut)]
     let mut size = [1080.0, 720.0];
-    // debug builds: `TIDALFAST_SIZE=1440x900` for screenshots
+    // debug builds: `OXYTIDE_SIZE=1440x900` for screenshots
     #[cfg(debug_assertions)]
-    if let Some((w, h)) = std::env::var("TIDALFAST_SIZE").ok().as_deref().and_then(|v| v.split_once('x')) {
+    if let Some((w, h)) = std::env::var("OXYTIDE_SIZE").ok().as_deref().and_then(|v| v.split_once('x')) {
         if let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>()) {
             size = [w, h];
         }
@@ -73,15 +77,15 @@ fn main() -> eframe::Result<()> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size(size)
         .with_min_inner_size([960.0, 600.0])
-        .with_title("tidalfast")
-        .with_app_id("tidalfast");
+        .with_title("Oxytide")
+        .with_app_id("oxytide");
     if let Some(icon) = app_icon() {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
 
     eframe::run_native(
-        "tidalfast",
+        "oxytide",
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc, link_arg)))),
     )

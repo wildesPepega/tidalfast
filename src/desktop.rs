@@ -1,4 +1,4 @@
-//! Desktop integration: registers tidalfast as the handler for `spotify:` and
+//! Desktop integration: registers oxytide as the handler for `spotify:` and
 //! `tidal:` links so clicking them (in a browser, in Discord …) opens the app.
 
 /// The app icon (window, taskbar, launcher).
@@ -25,8 +25,8 @@ pub fn current_exe() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Make tidalfast the handler for `spotify:` and `tidal:` links (what a
-/// browser opens after asking "open in tidalfast?"), or give that up again.
+/// Make oxytide the handler for `spotify:` and `tidal:` links (what a
+/// browser opens after asking "open in oxytide?"), or give that up again.
 /// Does nothing when everything is already as wanted.
 #[cfg(target_os = "linux")]
 pub fn set_link_handler(enabled: bool) {
@@ -34,12 +34,12 @@ pub fn set_link_handler(enabled: bool) {
         return;
     };
     let dir = dir.join("applications");
-    let path = dir.join("tidalfast.desktop");
+    let path = dir.join("oxytide.desktop");
     let mime = if enabled { "MimeType=x-scheme-handler/spotify;x-scheme-handler/tidal;\n" } else { "" };
     let content = format!(
-        "[Desktop Entry]\nType=Application\nName=tidalfast\nComment=A simple, native TIDAL client\n\
-         Exec=\"{}\" %u\nIcon=tidalfast\nTerminal=false\nCategories=AudioVideo;Audio;Player;\n\
-         {mime}StartupWMClass=tidalfast\n",
+        "[Desktop Entry]\nType=Application\nName=Oxytide\nComment=A simple, native TIDAL client\n\
+         Exec=\"{}\" %u\nIcon=oxytide\nTerminal=false\nCategories=AudioVideo;Audio;Player;\n\
+         {mime}StartupWMClass=oxytide\n",
         exe.display()
     );
     install_icon();
@@ -64,22 +64,22 @@ pub fn set_link_handler(enabled: bool) {
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
-            .is_some_and(|text| text.lines().next().is_some_and(|l| l.contains("tidalfast.desktop")));
+            .is_some_and(|text| text.lines().next().is_some_and(|l| l.contains("oxytide.desktop")));
         if ours && !changed {
             continue;
         }
         let gio = std::process::Command::new("gio")
-            .args(["mime", &mime_type, "tidalfast.desktop"])
+            .args(["mime", &mime_type, "oxytide.desktop"])
             .output()
             .is_ok_and(|o| o.status.success());
         if !gio {
-            let _ = std::process::Command::new("xdg-mime").args(["default", "tidalfast.desktop", &mime_type]).status();
+            let _ = std::process::Command::new("xdg-mime").args(["default", "oxytide.desktop", &mime_type]).status();
         }
     }
 }
 
 /// Registers (or removes) the URL protocols in the current user's registry,
-/// which is what makes a browser offer to open the link in tidalfast.
+/// which is what makes a browser offer to open the link in oxytide.
 #[cfg(windows)]
 pub fn set_link_handler(enabled: bool) {
     use std::os::windows::process::CommandExt;
@@ -113,7 +113,7 @@ fn install_icon() {
     let Some(dir) = dirs::data_dir().map(|d| d.join("icons/hicolor/256x256/apps")) else {
         return;
     };
-    let path = dir.join("tidalfast.png");
+    let path = dir.join("oxytide.png");
     if std::fs::read(&path).is_ok_and(|old| old == ICON_PNG) {
         return;
     }
@@ -126,11 +126,11 @@ pub fn set_link_handler(_enabled: bool) {}
 
 /// The now-playing plugin for GPU Screen Recorder (built from `gsr-plugin/`).
 #[cfg(target_os = "linux")]
-const GSR_PLUGIN: &[u8] = include_bytes!("../gsr-plugin/tidalfast_overlay.so");
+const GSR_PLUGIN: &[u8] = include_bytes!("../gsr-plugin/oxytide_overlay.so");
 
 #[cfg(target_os = "linux")]
 fn gsr_paths() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-    let plugin = dirs::data_dir()?.join("tidalfast/gsr/tidalfast_overlay.so");
+    let plugin = dirs::data_dir()?.join("oxytide/gsr/oxytide_overlay.so");
     let wrapper = dirs::home_dir()?.join(".local/bin/gpu-screen-recorder");
     Some((plugin, wrapper))
 }
@@ -140,7 +140,7 @@ fn gsr_paths() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
 pub fn gsr_plugin_installed() -> bool {
     let Some((plugin, wrapper)) = gsr_paths() else { return false };
     std::fs::read(&plugin).map_or(false, |old| old == GSR_PLUGIN)
-        && std::fs::read_to_string(&wrapper).map_or(false, |w| w.contains("tidalfast_overlay"))
+        && std::fs::read_to_string(&wrapper).map_or(false, |w| w.contains("oxytide_overlay"))
 }
 
 /// Install the plugin and a `gpu-screen-recorder` wrapper in `~/.local/bin`
@@ -165,7 +165,7 @@ pub fn install_gsr_plugin() -> Result<String, String> {
     std::fs::write(&tmp, GSR_PLUGIN).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &plugin).map_err(|e| e.to_string())?;
     let script = format!(
-        "#!/bin/sh\n# written by tidalfast: loads the now-playing overlay plugin\n\
+        "#!/bin/sh\n# written by oxytide: loads the now-playing overlay plugin\n\
          case \"$*\" in\n  *--list*|*--version*|*-h*|*--help*) exec \"{real}\" \"$@\" ;;\nesac\n\
          exec \"{real}\" \"$@\" -p \"{plugin}\"\n",
         real = real.display(),
@@ -173,6 +173,10 @@ pub fn install_gsr_plugin() -> Result<String, String> {
     );
     std::fs::write(&wrapper, script).map_err(|e| e.to_string())?;
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    // the plugin of the version that was still called "tidalfast"
+    if let Some(old) = dirs::data_dir().map(|d| d.join("tidalfast/gsr/tidalfast_overlay.so")) {
+        let _ = std::fs::remove_file(old);
+    }
     Ok("Installed. Restart GPU Screen Recorder (replay or recording) to load it.".into())
 }
 
@@ -180,10 +184,14 @@ pub fn install_gsr_plugin() -> Result<String, String> {
 #[cfg(target_os = "linux")]
 pub fn remove_gsr_plugin() {
     let Some((plugin, wrapper)) = gsr_paths() else { return };
-    if std::fs::read_to_string(&wrapper).map_or(false, |w| w.contains("tidalfast_overlay")) {
+    // (also a wrapper written by the version that was still called "tidalfast")
+    if std::fs::read_to_string(&wrapper).map_or(false, |w| w.contains("oxytide_overlay") || w.contains("tidalfast_overlay")) {
         let _ = std::fs::remove_file(&wrapper);
     }
     let _ = std::fs::remove_file(&plugin);
+    if let Some(old) = dirs::data_dir().map(|d| d.join("tidalfast/gsr/tidalfast_overlay.so")) {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -192,7 +200,7 @@ mod tests {
 
     #[test]
     fn installs_and_removes_the_recorder_plugin() {
-        let root = std::env::temp_dir().join(format!("tidalfast-gsr-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("oxytide-gsr-test-{}", std::process::id()));
         let (home, bin) = (root.join("home"), root.join("bin"));
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::create_dir_all(&home).unwrap();

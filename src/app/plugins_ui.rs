@@ -314,7 +314,7 @@ impl App {
         ui.add_space(4.0);
         ui.label(
             RichText::new(
-                "Plugins are small scripts that add buttons, menus and settings or change how tidalfast behaves. \
+                "Plugins are small scripts that add buttons, menus and settings or change how Oxytide behaves. \
                  They run in a sandbox: they cannot read your files, start programs or see your TIDAL account. \
                  A plugin can only do what you allow here.",
             )

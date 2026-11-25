@@ -1,9 +1,9 @@
-/* GPU Screen Recorder plugin: draws tidalfast's now-playing card into the
- * recording. The card is rendered by tidalfast (Settings -> Overlay) and
+/* GPU Screen Recorder plugin: draws oxytide's now-playing card into the
+ * recording. The card is rendered by oxytide (Settings -> Overlay) and
  * fetched from its local web server as premultiplied RGBA pixels; this plugin
  * only uploads it as a texture and draws one quad in a corner.
  *
- * Optional settings in ~/.config/tidalfast/gsr-overlay.conf, one per line:
+ * Optional settings in ~/.config/oxytide/gsr-overlay.conf, one per line:
  *   port=7788   corner=bl|br|tl|tr   scale=1.0   margin=10   flip=0|1
  * (flip=1, the default, is for recorders whose picture is upside down in OpenGL)
  */
@@ -173,8 +173,8 @@ static void load_config(Config *c) {
     c->port = 7788; strcpy(c->corner, "br"); c->scale = 1.0f; c->margin = 10; c->flip = 1;
     const char *base = getenv("XDG_CONFIG_HOME");
     char path[1024];
-    if (base && *base) snprintf(path, sizeof path, "%s/tidalfast/gsr-overlay.conf", base);
-    else snprintf(path, sizeof path, "%s/.config/tidalfast/gsr-overlay.conf", getenv("HOME") ? getenv("HOME") : "");
+    if (base && *base) snprintf(path, sizeof path, "%s/oxytide/gsr-overlay.conf", base);
+    else snprintf(path, sizeof path, "%s/.config/oxytide/gsr-overlay.conf", getenv("HOME") ? getenv("HOME") : "");
     FILE *f = fopen(path, "r");
     if (!f) return;
     char line[256];
@@ -279,7 +279,7 @@ static void *poll_thread(void *arg) {
             p->pixels = px; p->card_w = w; p->card_h = h;
             p->fresh = 1; p->damage = 1; p->want = 1;
         } else {
-            p->want = 0; /* paused, nothing playing or tidalfast gone: fade out, keep the last picture */
+            p->want = 0; /* paused, nothing playing or oxytide gone: fade out, keep the last picture */
         }
         pthread_mutex_unlock(&p->lock);
         for (int i = 0; i < 8 && !p->stop; i++) {
@@ -317,8 +317,8 @@ static int make_program(Plugin *p, const char *vs, const char *fs) {
 }
 
 static void setup_gl(Plugin *p, gsr_plugin_graphics_api api) {
-    if (!load_gl()) { p->gl_failed = 1; fprintf(stderr, "tidalfast overlay: OpenGL functions missing\n"); return; }
-    fprintf(stderr, "tidalfast overlay: drawing with %s\n", g_api == GSR_PLUGIN_GRAPHICS_API_EGL_ES ? "EGL/GLES" : "GLX");
+    if (!load_gl()) { p->gl_failed = 1; fprintf(stderr, "oxytide overlay: OpenGL functions missing\n"); return; }
+    fprintf(stderr, "oxytide overlay: drawing with %s\n", g_api == GSR_PLUGIN_GRAPHICS_API_EGL_ES ? "EGL/GLES" : "GLX");
     static const char *vs_es = "#version 100\nattribute vec2 pos; attribute vec2 uv; varying vec2 v;\n"
         "void main(){ v = uv; gl_Position = vec4(pos, 0.0, 1.0); }\n";
     static const char *fs_es = "#version 100\nprecision mediump float; varying vec2 v; uniform sampler2D tex; uniform float alpha;\n"
@@ -330,7 +330,7 @@ static void setup_gl(Plugin *p, gsr_plugin_graphics_api api) {
     int ok = api == GSR_PLUGIN_GRAPHICS_API_EGL_ES ? make_program(p, vs_es, fs_es) : make_program(p, vs_gl, fs_gl);
     if (!ok) ok = make_program(p, vs_es, fs_es);
     if (!ok) ok = make_program(p, vs_gl, fs_gl);
-    if (!ok) { p->gl_failed = 1; fprintf(stderr, "tidalfast overlay: shader failed\n"); return; }
+    if (!ok) { p->gl_failed = 1; fprintf(stderr, "oxytide overlay: shader failed\n"); return; }
     p->loc_pos = p_glGetAttribLocation(p->prog, "pos");
     p->loc_uv = p_glGetAttribLocation(p->prog, "uv");
     p->loc_tex = p_glGetUniformLocation(p->prog, "tex");
@@ -480,7 +480,7 @@ __attribute__((visibility("default"))) bool gsr_plugin_init(const gsr_plugin_ini
     g_api = params->graphics_api;
     if (pthread_create(&p->thread, NULL, poll_thread, p) == 0) p->thread_started = 1;
 
-    ret->name = "tidalfast now playing";
+    ret->name = "oxytide now playing";
     ret->version = 1;
     ret->userdata = p;
     ret->draw = draw;

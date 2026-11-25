@@ -101,7 +101,7 @@ pub struct TidalClient {
 impl TidalClient {
     pub fn new(country_code: String) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .user_agent("tidalfast/0.1")
+            .user_agent("oxytide/0.1")
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()
@@ -1248,11 +1248,11 @@ mod live {
         rt.block_on(async {
             let mut c = TidalClient::new(cfg.country_code.clone()).unwrap();
             c.set_tokens(&tokens);
-            let uuid = c.create_playlist("tidalfast api test (deleted right away)").await.unwrap();
+            let uuid = c.create_playlist("oxytide api test (deleted right away)").await.unwrap();
             println!("created {uuid}");
             let result = async {
                 let t = std::time::Instant::now();
-                c.update_playlist(&uuid, "tidalfast api test (deleted right away)", "a test description").await?;
+                c.update_playlist(&uuid, "oxytide api test (deleted right away)", "a test description").await?;
                 println!("update_playlist {:?}", t.elapsed());
                 let p = c.playlist(&uuid).await?;
                 println!("description now: {:?}", p.description);

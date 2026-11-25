@@ -119,8 +119,8 @@ impl System {
             return;
         }
         let config = PlatformConfig {
-            dbus_name: "tidalfast",
-            display_name: "tidalfast",
+            dbus_name: "oxytide",
+            display_name: "Oxytide",
             hwnd: self.hwnd,
         };
         let mut controls = match MediaControls::new(config) {
@@ -263,11 +263,11 @@ mod tray {
 
     impl ksni::Tray for Item {
         fn id(&self) -> String {
-            "tidalfast".into()
+            "oxytide".into()
         }
 
         fn title(&self) -> String {
-            "tidalfast".into()
+            "Oxytide".into()
         }
 
         fn category(&self) -> ksni::Category {
@@ -284,7 +284,7 @@ mod tray {
         }
 
         fn tool_tip(&self) -> ksni::ToolTip {
-            ksni::ToolTip { title: "tidalfast".into(), ..Default::default() }
+            ksni::ToolTip { title: "Oxytide".into(), ..Default::default() }
         }
 
         fn activate(&mut self, _x: i32, _y: i32) {
@@ -326,7 +326,7 @@ mod tray {
         pub fn start(notifier: Notifier) -> Option<Self> {
             let (playing_tx, mut playing_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
             let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
-            let spawned = std::thread::Builder::new().name("tidalfast-tray".into()).spawn(move || {
+            let spawned = std::thread::Builder::new().name("oxytide-tray".into()).spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
                 runtime.block_on(async move {
                     let tray = Item { notifier, playing: false };
@@ -419,7 +419,7 @@ mod tray {
             let tray = TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
                 .with_menu_on_left_click(false)
-                .with_tooltip("tidalfast")
+                .with_tooltip("Oxytide")
                 .with_icon(icon)
                 .build()
                 .map_err(|e| log::warn!("tray icon unavailable: {e}"))

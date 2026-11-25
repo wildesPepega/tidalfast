@@ -38,7 +38,7 @@ impl Player {
         let shared = Arc::new(Shared { frame: Mutex::new(None), stop: AtomicBool::new(false), paused: AtomicBool::new(false) });
         let thread_shared = shared.clone();
         std::thread::Builder::new()
-            .name("tidalfast-cover-video".into())
+            .name("oxytide-cover-video".into())
             .spawn(move || {
                 if let Err(e) = run(&url, &thread_shared, &ctx) {
                     log::info!("animated cover not played: {e}");
@@ -318,10 +318,10 @@ mod tests {
         assert!(!avcc_to_annexb(&[0, 0, 0, 9, 1, 2], 4, &mut bad));
     }
 
-    /// With `TIDALFAST_TEST_MP4=<file>`: the real decoder turns a real cover video into pictures.
+    /// With `OXYTIDE_TEST_MP4=<file>`: the real decoder turns a real cover video into pictures.
     #[test]
     fn decodes_a_real_cover_video() {
-        let Some(path) = std::env::var_os("TIDALFAST_TEST_MP4") else { return };
+        let Some(path) = std::env::var_os("OXYTIDE_TEST_MP4") else { return };
         let (packets, interval) = demux(std::fs::read(path).unwrap()).unwrap();
         assert!(packets.len() > 100, "{}", packets.len());
         assert!((interval.as_secs_f64() - 1.0 / 30.0).abs() < 0.002);

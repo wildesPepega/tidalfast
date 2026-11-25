@@ -1,4 +1,4 @@
-//! Update check and self-update from the GitHub releases of tidalfast.
+//! Update check and self-update from the GitHub releases of oxytide.
 //!
 //! The newest release is compared with the running version; installing
 //! downloads the matching file, verifies its SHA-256 (when GitHub gives one)
@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const REPO: &str = "wildesPepega/tidalfast";
+const REPO: &str = "wildesPepega/oxytide";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone)]
@@ -85,7 +85,7 @@ impl Updater {
 
 fn client() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
-        .user_agent(format!("tidalfast/{VERSION}"))
+        .user_agent(format!("oxytide/{VERSION}"))
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(600))
         .build()?)
@@ -153,9 +153,9 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 /// The release file that fits this installation.
 fn asset_name() -> Option<&'static str> {
     if cfg!(target_os = "windows") {
-        Some("tidalfast-windows-x86_64.exe")
+        Some("oxytide-windows-x86_64.exe")
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        Some(if std::env::var_os("APPIMAGE").is_some() { "tidalfast-x86_64.AppImage" } else { "tidalfast-linux-x86_64" })
+        Some(if std::env::var_os("APPIMAGE").is_some() { "oxytide-x86_64.AppImage" } else { "oxytide-linux-x86_64" })
     } else {
         None
     }
@@ -177,7 +177,7 @@ pub fn cannot_self_update() -> Option<String> {
         Err(e) => return Some(format!("{e:#}")),
     };
     let dir = target.parent()?;
-    let probe = dir.join(".tidalfast-write-test");
+    let probe = dir.join(".oxytide-write-test");
     match std::fs::File::create(&probe) {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
@@ -236,7 +236,7 @@ fn replace_running(bytes: &[u8]) -> Result<()> {
     }
     let target = target_path()?;
     let dir = target.parent().ok_or_else(|| anyhow!("no folder"))?;
-    let tmp = dir.join(".tidalfast-update.tmp");
+    let tmp = dir.join(".oxytide-update.tmp");
     std::fs::write(&tmp, bytes).with_context(|| format!("Could not write to {}", dir.display()))?;
     #[cfg(unix)]
     {
@@ -273,7 +273,7 @@ pub fn clean_up() {
     if let Ok(exe) = std::env::current_exe() {
         let old = old_path(&exe);
         if old.exists() {
-            let _ = std::thread::Builder::new().name("tidalfast-cleanup".into()).spawn(move || {
+            let _ = std::thread::Builder::new().name("oxytide-cleanup".into()).spawn(move || {
                 for _ in 0..60 {
                     match std::fs::remove_file(&old) {
                         Ok(()) => return,

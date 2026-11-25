@@ -1,9 +1,9 @@
-# tidalfast API
+# Oxytide API
 
-Everything you need to make **themes** and **plugins** for tidalfast.
+Everything you need to make **themes** and **plugins** for Oxytide.
 
 - [Themes](#themes): colours in a small text file, no code. Five minutes.
-- [Plugins](#plugins): scripts that add buttons, menus and settings, react to the music and change how tidalfast behaves, in a sandbox.
+- [Plugins](#plugins): scripts that add buttons, menus and settings, react to the music and change how Oxytide behaves, in a sandbox.
 - [Security](#security): what plugins can and cannot do, and how you stay in control.
 
 Examples to copy from are in [`examples/`](examples/).
@@ -18,9 +18,9 @@ A theme is one `.toml` file. It cannot run anything; it only changes colours.
 
 | System  | Folder                                              |
 |---------|-----------------------------------------------------|
-| Linux   | `~/.config/tidalfast/themes/`                       |
-| Windows | `%APPDATA%\tidalfast\themes\`                       |
-| macOS   | `~/Library/Application Support/tidalfast/themes/`   |
+| Linux   | `~/.config/oxytide/themes/`                       |
+| Windows | `%APPDATA%\oxytide\themes\`                       |
+| macOS   | `~/Library/Application Support/oxytide/themes/`   |
 
 *Settings → Appearance → Theme → Open themes folder* opens it. After adding or editing a file press *Reload* there, then pick the theme. The file name (without `.toml`) is the theme's id: small letters, digits, `-` and `_` only.
 
@@ -52,7 +52,7 @@ Colours are written `#rrggbb` or `#rgb`.
 
 ### What is corrected for you
 
-The text in tidalfast is light on dark glass, so themes cannot make the panels light. To keep everything readable:
+The text in Oxytide is light on dark glass, so themes cannot make the panels light. To keep everything readable:
 
 - the **panel** colour is darkened if it is lighter than 20 % lightness;
 - the **accent** is lightened until it has a contrast of at least 4.5 against the glass (an accent is also used as text and as button fill).
@@ -84,9 +84,9 @@ Plugins are written in [Rhai](https://rhai.rs), a small scripting language that 
 
 | System  | Folder                                               |
 |---------|------------------------------------------------------|
-| Linux   | `~/.config/tidalfast/plugins/`                       |
-| Windows | `%APPDATA%\tidalfast\plugins\`                       |
-| macOS   | `~/Library/Application Support/tidalfast/plugins/`   |
+| Linux   | `~/.config/oxytide/plugins/`                       |
+| Windows | `%APPDATA%\oxytide\plugins\`                       |
+| macOS   | `~/Library/Application Support/oxytide/plugins/`   |
 
 The folder's name must be the plugin's `id`. In *Settings → Plugins* use *Open plugins folder*, then *Reload*. A plugin **never runs until the user has seen what it asks for and allowed it** (see [Security](#security)).
 
@@ -155,7 +155,7 @@ Only define the ones you need.
 
 ```rust
 let x = 5;                      // variables
-const NAME = "tidalfast";       // constants
+const NAME = "Oxytide";       // constants
 let list = [1, 2, 3];           // arrays
 let map = #{ a: 1, b: "two" };  // maps (objects); map.a or map["a"]
 let nothing = ();               // "no value" (like null)
@@ -172,7 +172,7 @@ let y = storage::get("k") ?? 0; // ?? gives a default when the left side is ()
 
 Things that are different from what you may expect:
 
-- **Functions cannot see variables defined outside them.** To keep something between calls use [`storage`](#storage) (kept on disk), [`state`](#state) (kept while tidalfast runs) or [`settings::get`](#settings).
+- **Functions cannot see variables defined outside them.** To keep something between calls use [`storage`](#storage) (kept on disk), [`state`](#state) (kept while Oxytide runs) or [`settings::get`](#settings).
 - `import` and `eval` are switched off. All code goes in `main.rhai`.
 - Integers (`1`) and floats (`1.0`) are different types. Mixing them in a sum usually works, but when something complains about a type, convert with `to_float(x)` / `to_int(x)`.
 
@@ -205,7 +205,7 @@ Everything is called as `module::function(...)`. The *Needs* column is the permi
 
 | Function | Needs | Description |
 |----------|-------|-------------|
-| `app::version()` | – | tidalfast's version, e.g. `"0.7.0"`. |
+| `app::version()` | – | Oxytide's version, e.g. `"0.7.0"`. |
 | `app::api_version()` | – | The interface version, `1`. |
 | `app::features()` | – | Array of the names of the parts that can be hidden. |
 | `app::hide(part)` | `ui.modify` | Hide a built-in part of the interface, see [Hiding parts](#hiding-parts). |
@@ -240,7 +240,7 @@ Menu item keys: `id`, `label` (required), `icon`. When clicked, `on_action(id, #
 
 #### settings
 
-Settings pages let people configure your plugin. Values are remembered by tidalfast (no `storage` permission needed) and come back the next time the plugin starts: the functions that create an entry return the **current** value.
+Settings pages let people configure your plugin. Values are remembered by Oxytide (no `storage` permission needed) and come back the next time the plugin starts: the functions that create an entry return the **current** value.
 
 ```rust
 settings::category("mine", "My plugin", "gear");      // a page of its own (id, title, icon)
@@ -280,7 +280,7 @@ Small amounts of data on disk, private to the plugin (`plugin-data/<id>.json` ne
 
 #### state
 
-Like storage, but only in memory while tidalfast runs, and without a permission. Up to 256 values.
+Like storage, but only in memory while Oxytide runs, and without a permission. Up to 256 values.
 
 | Function | Description |
 |----------|-------------|
@@ -387,7 +387,7 @@ Icons are named; an unknown name shows a puzzle piece.
 
 ### Limits
 
-These keep a misbehaving plugin from slowing tidalfast down. When a limit is hit, the current call stops with an error shown in the plugin's *Messages*; the plugin keeps running. A plugin that fails more than 20 times in a minute is stopped (*Restart* in the settings).
+These keep a misbehaving plugin from slowing Oxytide down. When a limit is hit, the current call stops with an error shown in the plugin's *Messages*; the plugin keeps running. A plugin that fails more than 20 times in a minute is stopped (*Restart* in the settings).
 
 | Limit | Value |
 |-------|-------|
@@ -406,7 +406,7 @@ These keep a misbehaving plugin from slowing tidalfast down. When a limit is hit
 - *Settings → Plugins → Messages* of a plugin shows what it printed with `print()` and every error with the function it happened in.
 - A syntax error in the script is shown as "Stopped: the script has an error …" with the position.
 - Turn on **Developer mode** in *Settings → Plugins* while writing: then edits to `main.rhai` take effect after *Reload* without asking for approval again. (A plugin that asks for **more permissions** always needs approval.)
-- Start tidalfast with `--no-plugins` to run without any plugin, e.g. if one misbehaves.
+- Start Oxytide with `--no-plugins` to run without any plugin, e.g. if one misbehaves.
 
 ### Checklist for plugin authors
 
@@ -420,7 +420,7 @@ These keep a misbehaving plugin from slowing tidalfast down. When a limit is hit
 
 ## Security
 
-Plugins are code from other people, so tidalfast treats them as untrusted.
+Plugins are code from other people, so Oxytide treats them as untrusted.
 
 ### What a plugin can never do
 
@@ -435,16 +435,16 @@ Plugins are code from other people, so tidalfast treats them as untrusted.
 
 - **Nothing runs without approval.** New plugins are off. Turning one on shows what it asks for in plain words, with risk colours, the servers it may reach and a fingerprint of its files.
 - **Changes need approval again.** The approval is tied to the fingerprint (SHA-256 of `plugin.toml` and `main.rhai`). If the files change, or the plugin asks for more, it stops until you look at it again. *Developer mode* skips this only for edits to the script, never for new permissions.
-- **Master switch.** *Settings → Plugins → Allow plugins* turns every plugin off at once. `tidalfast --no-plugins` starts without them.
+- **Master switch.** *Settings → Plugins → Allow plugins* turns every plugin off at once. `oxytide --no-plugins` starts without them.
 - **Messages.** Everything a plugin prints or fails with is visible in its card.
-- **Plugins are not installed from the internet by the app.** You put the folder there yourself; tidalfast never downloads plugins.
+- **Plugins are not installed from the internet by the app.** You put the folder there yourself; Oxytide never downloads plugins.
 
 ### What you still have to decide
 
 Approving a plugin means trusting its author with exactly what the list says:
 
 - `player.control` and `hooks` can change what plays and block buttons.
-- `clipboard` and `open_url` can put text in your clipboard or open a web page (one at a time, and tidalfast shows a note when it happens).
+- `clipboard` and `open_url` can put text in your clipboard or open a web page (one at a time, and Oxytide shows a note when it happens).
 - `network` lets the plugin send what it knows (the current song, its own settings) to the listed servers.
 - `ui.modify` can hide parts of the interface.
 
@@ -452,7 +452,7 @@ Read the script if you can. It is a short text file. Only allow plugins from peo
 
 ### Reporting a problem
 
-If you find a way out of the sandbox, please report it at <https://github.com/wildesPepega/tidalfast/issues> (or privately, if you prefer, via the maintainer's GitHub profile).
+If you find a way out of the sandbox, please report it at <https://github.com/wildesPepega/oxytide/issues> (or privately, if you prefer, via the maintainer's GitHub profile).
 
 ---
 

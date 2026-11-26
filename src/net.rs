@@ -839,7 +839,7 @@ async fn fetch_image(http: reqwest::Client, url: String, ev: Sender<Ev>) {
     // 1) disk cache
     if let Some(path) = &path {
         if let Ok(bytes) = tokio::fs::read(path).await {
-            if send_image(&url, &bytes, &ev) {
+            if decode_and_send(&url, bytes, &ev).await {
                 return;
             }
             let _ = tokio::fs::remove_file(path).await;
@@ -848,13 +848,15 @@ async fn fetch_image(http: reqwest::Client, url: String, ev: Sender<Ev>) {
 
     // 2) network, then store
     let bytes = match http.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-            Ok(b) => b,
-            Err(_) => return,
-        },
+        Ok(resp) if resp.status().is_success() && resp.content_length().is_none_or(|n| n <= MAX_IMAGE_BYTES) => {
+            match resp.bytes().await {
+                Ok(b) if b.len() as u64 <= MAX_IMAGE_BYTES => b.to_vec(),
+                _ => return,
+            }
+        }
         _ => return,
     };
-    if send_image(&url, &bytes, &ev) {
+    if decode_and_send(&url, bytes.clone(), &ev).await {
         if let Some(path) = path {
             if let Some(dir) = path.parent() {
                 let _ = tokio::fs::create_dir_all(dir).await;
@@ -864,9 +866,29 @@ async fn fetch_image(http: reqwest::Client, url: String, ev: Sender<Ev>) {
     }
 }
 
+/// Covers are a few hundred kB; anything far bigger is not one.
+const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Decode on a blocking thread: decoding takes milliseconds of CPU and would stall the few
+/// threads that drive all network requests.
+async fn decode_and_send(url: &str, bytes: Vec<u8>, ev: &Sender<Ev>) -> bool {
+    let (url, ev) = (url.to_string(), ev.clone());
+    tokio::task::spawn_blocking(move || send_image(&url, &bytes, &ev)).await.unwrap_or(false)
+}
+
 /// Decode and forward an image; false if the bytes are not a usable image.
 fn send_image(url: &str, bytes: &[u8], ev: &Sender<Ev>) -> bool {
-    match image::load_from_memory(bytes) {
+    let mut reader = match image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format() {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    // a picture that would unpack to gigabytes is refused before it is decoded
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    match reader.decode() {
         Ok(img) => {
             let rgba = img.to_rgba8();
             let (width, height) = rgba.dimensions();

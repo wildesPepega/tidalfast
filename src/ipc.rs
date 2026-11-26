@@ -10,16 +10,24 @@ mod imp {
     use std::path::PathBuf;
     use std::sync::mpsc::{self, Receiver};
 
+    use std::io::Read;
+    use std::time::Duration;
+
+    /// Longest message accepted (a link, or "focus").
+    const MAX_LINE: u64 = 4096;
+
     fn socket_path() -> PathBuf {
-        dirs::runtime_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("oxytide.sock")
+        // a private folder: in the shared temp folder another user could take the name first
+        crate::fsx::runtime_dir().join("oxytide.sock")
     }
 
     /// Send `message` to a running instance. True if one took it.
     pub fn forward(message: &str) -> bool {
         match UnixStream::connect(socket_path()) {
-            Ok(mut stream) => stream.write_all(format!("{message}\n").as_bytes()).is_ok(),
+            Ok(mut stream) => {
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                stream.write_all(format!("{message}\n").as_bytes()).is_ok()
+            }
             Err(_) => false,
         }
     }
@@ -30,9 +38,19 @@ mod imp {
         let _ = std::fs::remove_file(&path);
         match UnixListener::bind(&path) {
             Ok(listener) => {
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                }
                 std::thread::spawn(move || {
                     for stream in listener.incoming().flatten() {
-                        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                        // a client that connects and says nothing must not block the next one
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let reader = BufReader::new(stream.take(MAX_LINE * 4));
+                        for line in reader.lines().map_while(Result::ok).take(4) {
+                            if line.len() as u64 > MAX_LINE {
+                                continue;
+                            }
                             #[cfg(target_os = "linux")]
                             crate::kwin::wake_if_hidden();
                             let _ = tx.send(line);

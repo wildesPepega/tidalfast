@@ -64,7 +64,8 @@ fn script(hidden: bool) -> String {
 }
 
 fn script_path() -> PathBuf {
-    dirs::runtime_dir().unwrap_or_else(std::env::temp_dir).join("oxytide-window.js")
+    // KWin runs this file: it must live where no other user can swap it
+    crate::fsx::runtime_dir().join("oxytide-window.js")
 }
 
 /// Call a method over D-Bus with whichever command line tool exists; the reply as text.

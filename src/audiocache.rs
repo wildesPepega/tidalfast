@@ -62,13 +62,8 @@ fn install_key() -> Option<[u8; 32]> {
             }
         }
         let key = random_bytes::<32>();
-        fs::create_dir_all(path.parent()?).ok()?;
-        fs::write(&path, key).ok()?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-        }
+        // private from the first byte on (no moment where it is readable for others)
+        crate::fsx::write_private(&path, &key).ok()?;
         Some(key)
     })
 }

@@ -14,6 +14,7 @@ mod demo;
 mod desktop;
 mod discord;
 mod eq;
+mod fsx;
 mod import;
 mod ipc;
 #[cfg(target_os = "linux")]

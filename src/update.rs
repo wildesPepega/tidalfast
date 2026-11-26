@@ -200,7 +200,12 @@ fn download(asset: &Asset, progress: impl Fn(f32)) -> Result<Vec<u8>> {
     if !resp.status().is_success() {
         bail!("Download failed ({})", resp.status());
     }
+    // the program is some tens of MB; anything far larger is not it (and must not fill the memory)
+    const MAX_BYTES: u64 = 512 * 1024 * 1024;
     let total = resp.content_length().unwrap_or(asset.size).max(1);
+    if total > MAX_BYTES || asset.size > MAX_BYTES {
+        bail!("The download is unexpectedly large");
+    }
     let mut bytes = Vec::with_capacity(total as usize);
     let mut buf = [0u8; 64 * 1024];
     let mut last = 0.0f32;
@@ -210,6 +215,9 @@ fn download(asset: &Asset, progress: impl Fn(f32)) -> Result<Vec<u8>> {
             break;
         }
         bytes.extend_from_slice(&buf[..n]);
+        if bytes.len() as u64 > MAX_BYTES {
+            bail!("The download is unexpectedly large");
+        }
         let p = (bytes.len() as f32 / total as f32).min(1.0);
         if p - last >= 0.01 {
             last = p;

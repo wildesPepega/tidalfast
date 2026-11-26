@@ -188,13 +188,24 @@ impl Drop for Overlay {
     }
 }
 
+/// Connections answered at the same time; more are turned away (a flood of connections from the
+/// network must not start thousands of threads).
+const MAX_CONNECTIONS: usize = 16;
+
 fn serve(listener: TcpListener, shared: Arc<Mutex<Shared>>, stop: Arc<AtomicBool>) {
+    let open = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
-                let shared = shared.clone();
+                if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    open.fetch_sub(1, Ordering::SeqCst);
+                    drop(stream);
+                    continue;
+                }
+                let (shared, open) = (shared.clone(), open.clone());
                 std::thread::spawn(move || {
                     let _ = handle(stream, &shared);
+                    open.fetch_sub(1, Ordering::SeqCst);
                 });
             }
             Err(_) => std::thread::sleep(Duration::from_millis(100)),
@@ -246,7 +257,10 @@ fn handle(mut stream: TcpStream, shared: &Mutex<Shared>) -> std::io::Result<()> 
                 .split_once('?')
                 .and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("scale=")))
                 .and_then(|v| v.parse::<f32>().ok())
-                .unwrap_or(1.0);
+                // NaN would slip through the clamp in `card::render`
+                .filter(|v| v.is_finite())
+                .unwrap_or(1.0)
+                .clamp(0.5, 3.0);
             match card_bytes(shared, scale) {
                 Some((w, h, px)) => respond_bytes(&mut stream, "200 OK", "application/octet-stream", &format!("X-Width: {w}\r\nX-Height: {h}\r\n"), &px),
                 None => respond(&mut stream, "204 No Content", "text/plain", ""),

@@ -40,7 +40,7 @@ pub fn set_link_handler(enabled: bool) {
         "[Desktop Entry]\nType=Application\nName=Oxytide\nComment=A simple, native TIDAL client\n\
          Exec=\"{}\" %u\nIcon=oxytide\nTerminal=false\nCategories=AudioVideo;Audio;Player;\n\
          {mime}StartupWMClass=oxytide\n",
-        exe.display()
+        desktop_quote(&exe.to_string_lossy())
     );
     install_icon();
     let changed = std::fs::read_to_string(&path).map_or(true, |old| old != content);
@@ -105,6 +105,26 @@ pub fn set_link_handler(enabled: bool) {
             "/f",
         ]);
     }
+}
+
+/// Escape a path for a quoted argument in a desktop entry's `Exec=` line (the desktop entry
+/// spec: `"`, `` ` ``, `$` and backslashes get a backslash, and the value escapes backslashes once more).
+#[cfg(target_os = "linux")]
+fn desktop_quote(path: &str) -> String {
+    let mut out = String::new();
+    for c in path.chars() {
+        match c {
+            '"' | '`' | '$' => {
+                out.push_str("\\\\");
+                out.push(c);
+            }
+            '\\' => out.push_str("\\\\\\\\"),
+            '%' => out.push_str("%%"),
+            '\n' | '\r' => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Puts the icon where launchers and Wayland taskbars look it up by name.
@@ -197,6 +217,13 @@ pub fn remove_gsr_plugin() {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_are_quoted_for_desktop_entries() {
+        assert_eq!(desktop_quote("/opt/Oxytide/oxytide"), "/opt/Oxytide/oxytide");
+        assert_eq!(desktop_quote("/a b/$x\"y`z%"), "/a b/\\\\$x\\\\\"y\\\\`z%%");
+        assert_eq!(desktop_quote("/a\\b"), "/a\\\\\\\\b");
+    }
 
     #[test]
     fn installs_and_removes_the_recorder_plugin() {

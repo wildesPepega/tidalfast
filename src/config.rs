@@ -178,28 +178,76 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        let path = Self::path();
-        match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-                log::warn!("settings parse error ({e}), using defaults");
-                Settings::default()
-            }),
-            Err(_) => Settings::default(),
+        Self::load_from(&Self::path())
+    }
+
+    fn load_from(path: &std::path::Path) -> Self {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(_) => return Settings::default(),
+        };
+        #[cfg(unix)]
+        {
+            // older versions wrote the file (it holds the sign-in) readable for everyone
+            use std::os::unix::fs::PermissionsExt;
+            if std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            }
         }
+        serde_json::from_str(&text).unwrap_or_else(|e| {
+            // keep the damaged file: the next save would otherwise throw away the sign-in and every setting
+            let backup = path.with_extension("json.broken");
+            let kept = crate::fsx::write_private(&backup, text.as_bytes()).is_ok();
+            log::warn!("settings parse error ({e}), using defaults{}", if kept { format!("; the old file is kept as {}", backup.display()) } else { String::new() });
+            Settings::default()
+        })
     }
 
     pub fn save(&self) {
-        let path = Self::path();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        // demo runs (screenshots) work on made-up settings: they must never replace the real ones
+        #[cfg(debug_assertions)]
+        if crate::demo::enabled() {
+            return;
         }
+        self.save_to(&Self::path());
+    }
+
+    fn save_to(&self, path: &std::path::Path) {
         match serde_json::to_string_pretty(self) {
+            // private (it holds the sign-in) and atomic (a crash while saving cannot leave half a file)
             Ok(text) => {
-                if let Err(e) = std::fs::write(&path, text) {
+                if let Err(e) = crate::fsx::write_private(path, text.as_bytes()) {
                     log::warn!("failed to save settings: {e}");
                 }
             }
             Err(e) => log::warn!("failed to serialize settings: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_damaged_file_is_kept_aside_and_saving_is_private() {
+        let dir = std::env::temp_dir().join(format!("oxytide-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{\"refresh_token\": \"abc\", oops").unwrap();
+        let s = Settings::load_from(&path);
+        assert!(s.refresh_token.is_empty());
+        assert!(std::fs::read_to_string(dir.join("settings.json.broken")).unwrap().contains("abc"));
+
+        let s = Settings { refresh_token: "xyz".into(), ..Settings::default() };
+        s.save_to(&path);
+        assert_eq!(Settings::load_from(&path).refresh_token, "xyz");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

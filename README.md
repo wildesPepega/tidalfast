@@ -32,7 +32,9 @@ No Electron, no web view, just a small binary.</p>
 ## Features
 
 - **Song cache:** songs you have played are kept on disk (up to a size you choose, 2 GB by default, oldest removed first), so they start at once next time and play without a connection. The files on disk are scrambled with a key of your installation, so they are not music files you could just open or copy around. Switch it off or clear it in *Settings → Playback*; *Settings → System* has a button that clears all caches.
-- **Best quality, always.** Oxytide requests the highest quality TIDAL offers for every track (Hi-Res Lossless → Lossless FLAC → High AAC). Hi-Res streams use DASH, which the player cannot decode yet, so in practice you get lossless FLAC. There is nothing to configure.
+- **Streaming quality:** Oxytide requests the best quality TIDAL offers for every track (Hi-Res Lossless → Lossless FLAC → High AAC). Hi-Res streams use DASH, which the player cannot decode yet, so in practice you get lossless FLAC. On slow or metered connections, pick *High* (AAC 320 kbit/s) or *Data saver* (AAC 96 kbit/s) in *Settings → Playback*.
+- **Volume normalization:** songs play at about the same loudness, using TIDAL's loudness data (ReplayGain), never pushed past their peak. On by default; switch it off in *Settings → Playback*.
+- **Sleep timer:** the moon in the player bar stops the music after 15–90 minutes or at the end of the current song, with a gentle fade-out. It keeps working while Oxytide is hidden in the tray.
 - **Search with link support:** search TIDAL for tracks, albums, artists and playlists, or paste a link instead. Spotify (tracks, albums, artists, playlists, `spotify:` URIs and `spotify.link` short links), YouTube / YouTube Music, TIDAL and [linkhop](https://github.com/paul-wtf/linkhop) links are converted and opened on TIDAL.
 - **Library:** your playlists, liked tracks, albums and artist pages (top tracks and releases).
 - **Playlist details:** edit the title, description and cover image of your own playlists (right-click a playlist or use *Edit details*); descriptions are shown on the playlist page.

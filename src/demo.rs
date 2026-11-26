@@ -346,7 +346,7 @@ pub async fn worker(mut rx: UnboundedReceiver<Cmd>, ev: Sender<Ev>) {
                 let _ = ev.send(Ev::PlaylistTracks { uuid, tracks });
             }
             Cmd::Search(query) => {
-                let _ = ev.send(Ev::Search(search(&query)));
+                let _ = ev.send(Ev::Search { results: search(&query), query });
             }
             Cmd::LoadArtist { id } => {
                 let _ = ev.send(Ev::Artist(Box::new(artist_page(id))));

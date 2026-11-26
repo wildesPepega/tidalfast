@@ -15,6 +15,10 @@ use crate::tidal::{Poll, TidalClient, Tokens};
 pub enum Cmd {
     /// Begin the device-code login flow.
     Login,
+    /// Forget the sign-in (also in requests still under way).
+    Logout,
+    /// The best stream quality to ask for (`HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH`, `LOW`).
+    SetQuality(String),
     /// Load the signed-in user, their name and playlists.
     LoadUser,
     LoadPlaylist {
@@ -134,7 +138,13 @@ pub enum Ev {
         track_id: u64,
         tracks: Vec<Track>,
     },
-    Search(SearchResults),
+    /// Results for `query` (searches run side by side: only the latest query's count).
+    Search {
+        query: String,
+        results: SearchResults,
+    },
+    /// The sign-in was refused and could not be renewed: sign in again.
+    SessionExpired,
     Stream {
         track_id: u64,
         info: StreamInfo,
@@ -204,6 +214,11 @@ impl Net {
 
         let mut client = TidalClient::new(country_code)?;
         client.set_tokens(&tokens);
+        // a refreshed sign-in is saved at once, whichever request needed it
+        let sink = ev_tx.clone();
+        client.on_tokens(Arc::new(move |tokens| {
+            let _ = sink.send(Ev::Tokens(tokens));
+        }));
 
         rt.spawn_blocking(prune_cache);
         #[cfg(debug_assertions)]
@@ -237,15 +252,35 @@ async fn worker(
 ) {
     let mut import_job = 0u64;
     while let Some(cmd) = rx.recv().await {
+        // Reads that only fetch something run side by side on a copy of the client (it shares
+        // the sign-in), so starting a song never waits for a slow artist page or an import.
+        // Edits stay in this loop, one after the other, in the order they were made.
+        let cmd = match cmd {
+            Cmd::ResolveTrack { .. }
+            | Cmd::LoadTrackInfo { .. }
+            | Cmd::LoadPlaylist { .. }
+            | Cmd::LoadArtist { .. }
+            | Cmd::Radio { .. }
+            | Cmd::AlbumInfo { .. }
+            | Cmd::Search(_) => {
+                let (client, ev) = (client.clone(), ev.clone());
+                tokio::spawn(read_only(client, cmd, ev));
+                continue;
+            }
+            other => other,
+        };
         match cmd {
             Cmd::Login => login(&mut client, &ev).await,
+            Cmd::Logout => client.clear_tokens(),
+            Cmd::SetQuality(quality) => client.set_max_quality(&quality),
             Cmd::LoadUser => load_user(&mut client, &ev).await,
-            Cmd::LoadPlaylist { uuid } => match client.collection_tracks(&uuid).await {
-                Ok(tracks) => {
-                    send_tracks(&ev, uuid, tracks);
-                }
-                Err(e) => send_error(&ev, e),
-            },
+            Cmd::ResolveTrack { .. }
+            | Cmd::LoadTrackInfo { .. }
+            | Cmd::LoadPlaylist { .. }
+            | Cmd::LoadArtist { .. }
+            | Cmd::Radio { .. }
+            | Cmd::AlbumInfo { .. }
+            | Cmd::Search(_) => unreachable!("handled above"),
             Cmd::SetLiked { track_id, liked } => {
                 if let Err(e) = client.set_liked(track_id, liked).await {
                     send_error(&ev, e);
@@ -302,12 +337,6 @@ async fn worker(
                 finish_playlist_edit(&mut client, &ev, result, "Playlist created").await;
             }
             Cmd::LoadHome => load_home(&mut client, &ev).await,
-            Cmd::Radio { track_id } => match client.track_radio(track_id).await {
-                Ok(tracks) => {
-                    let _ = ev.send(Ev::Radio { track_id, tracks });
-                }
-                Err(e) => log::warn!("radio failed: {e:#}"),
-            },
             Cmd::LoadFavorites => match client.user_id {
                 Some(id) => match client.favorite_tracks(id).await {
                     Ok(tracks) => {
@@ -317,26 +346,6 @@ async fn worker(
                 },
                 None => send_error(&ev, anyhow::anyhow!("not signed in")),
             },
-            Cmd::Search(query) => match client.search(&query).await {
-                Ok(results) => {
-                    let _ = ev.send(Ev::Search(results));
-                }
-                Err(e) => send_error(&ev, e),
-            },
-            Cmd::ResolveTrack { track_id, preload } => {
-                match client.stream_info(track_id).await {
-                    Ok(info) => {
-                        let _ = ev.send(Ev::Stream { track_id, info, preload });
-                    }
-                    // a failed preload just means no smooth transition
-                    Err(e) if preload => log::warn!("preload resolve failed: {e:#}"),
-                    Err(e) => {
-                        log::warn!("stream failed: {e:#}");
-                        let _ = ev.send(Ev::StreamFailed { track_id, message: e.to_string() });
-                    }
-                }
-            }
-            Cmd::LoadArtist { id } => load_artist(&mut client, &ev, id).await,
             Cmd::ImportSpotify { id, job } => {
                 import_job = job;
                 let fetched = crate::import::fetch_embed(&client.http(), "playlist", &id).await;
@@ -383,32 +392,6 @@ async fn worker(
                 let message = format!("Playlist “{title}” created with {count} tracks");
                 finish_playlist_edit(&mut client, &ev, result, &message).await;
             }
-            Cmd::AlbumInfo { id } => {
-                let meta = match client.album_info(id).await {
-                    Ok(album) => Some(crate::presence::AlbumMeta {
-                        year: album.year().unwrap_or_default().to_string(),
-                        tracks: album.number_of_tracks.unwrap_or(0),
-                        kind: album.kind,
-                    }),
-                    Err(e) => {
-                        log::warn!("album info failed: {e:#}");
-                        None
-                    }
-                };
-                let _ = ev.send(Ev::AlbumMeta { id, meta });
-            }
-            Cmd::LoadTrackInfo { track_id } => {
-                let lyrics = client.lyrics(track_id).await.unwrap_or_else(|e| {
-                    log::warn!("lyrics failed: {e:#}");
-                    Lyrics::default()
-                });
-                let _ = ev.send(Ev::Lyrics { track_id, lyrics });
-                let groups = client.credits(track_id).await.unwrap_or_else(|e| {
-                    log::warn!("credits failed: {e:#}");
-                    Vec::new()
-                });
-                let _ = ev.send(Ev::Credits { track_id, groups });
-            }
             Cmd::Share { url, target } => {
                 let http = client.http();
                 let ev = ev.clone();
@@ -439,6 +422,73 @@ async fn worker(
                 tokio::spawn(async move { fetch_image(http, url, ev).await });
             }
         }
+    }
+}
+
+/// The commands that only read: each runs on its own copy of the client.
+async fn read_only(mut client: TidalClient, cmd: Cmd, ev: Sender<Ev>) {
+    match cmd {
+        Cmd::LoadPlaylist { uuid } => match client.collection_tracks(&uuid).await {
+            Ok(tracks) => send_tracks(&ev, uuid, tracks),
+            Err(e) => send_error(&ev, e),
+        },
+        Cmd::ResolveTrack { track_id, preload } => match client.stream_info(track_id).await {
+            Ok(info) => {
+                let _ = ev.send(Ev::Stream { track_id, info, preload });
+            }
+            Err(e) if crate::tidal::is_session_expired(&e) => {
+                let _ = ev.send(Ev::SessionExpired);
+                if !preload {
+                    let _ = ev.send(Ev::StreamFailed { track_id, message: e.to_string() });
+                }
+            }
+            // a failed preload just means no smooth transition
+            Err(e) if preload => log::warn!("preload resolve failed: {e:#}"),
+            Err(e) => {
+                log::warn!("stream failed: {e:#}");
+                let _ = ev.send(Ev::StreamFailed { track_id, message: e.to_string() });
+            }
+        },
+        Cmd::LoadTrackInfo { track_id } => {
+            let lyrics = client.lyrics(track_id).await.unwrap_or_else(|e| {
+                log::warn!("lyrics failed: {e:#}");
+                Lyrics::default()
+            });
+            let _ = ev.send(Ev::Lyrics { track_id, lyrics });
+            let groups = client.credits(track_id).await.unwrap_or_else(|e| {
+                log::warn!("credits failed: {e:#}");
+                Vec::new()
+            });
+            let _ = ev.send(Ev::Credits { track_id, groups });
+        }
+        Cmd::LoadArtist { id } => load_artist(&mut client, &ev, id).await,
+        Cmd::Radio { track_id } => match client.track_radio(track_id).await {
+            Ok(tracks) => {
+                let _ = ev.send(Ev::Radio { track_id, tracks });
+            }
+            Err(e) => log::warn!("radio failed: {e:#}"),
+        },
+        Cmd::AlbumInfo { id } => {
+            let meta = match client.album_info(id).await {
+                Ok(album) => Some(crate::presence::AlbumMeta {
+                    year: album.year().unwrap_or_default().to_string(),
+                    tracks: album.number_of_tracks.unwrap_or(0),
+                    kind: album.kind,
+                }),
+                Err(e) => {
+                    log::warn!("album info failed: {e:#}");
+                    None
+                }
+            };
+            let _ = ev.send(Ev::AlbumMeta { id, meta });
+        }
+        Cmd::Search(query) => match client.search(&query).await {
+            Ok(results) => {
+                let _ = ev.send(Ev::Search { query, results });
+            }
+            Err(e) => send_error(&ev, e),
+        },
+        _ => {}
     }
 }
 
@@ -909,5 +959,9 @@ fn send_image(url: &str, bytes: &[u8], ev: &Sender<Ev>) -> bool {
 
 fn send_error(ev: &Sender<Ev>, error: anyhow::Error) {
     log::warn!("network error: {error:#}");
+    if crate::tidal::is_session_expired(&error) {
+        let _ = ev.send(Ev::SessionExpired);
+        return;
+    }
     let _ = ev.send(Ev::Error(error.to_string()));
 }

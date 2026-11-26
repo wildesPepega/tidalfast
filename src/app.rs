@@ -611,6 +611,8 @@ impl App {
                         uri_complete,
                     });
                 }
+                // after a sign-out, a request that was still under way must not sign the user in again
+                Ev::Tokens(_) | Ev::LoggedIn { .. } if self.user.is_none() && !self.login_busy && self.device_code.is_none() => {}
                 Ev::Tokens(tokens) => {
                     self.cfg.access_token = tokens.access_token;
                     self.cfg.refresh_token = tokens.refresh_token;
@@ -681,7 +683,9 @@ impl App {
                         }
                     }
                 }
-                Ev::Search(results) => {
+                // an older search that finished late: the newer one counts
+                Ev::Search { query, .. } if query != self.last_query => {}
+                Ev::Search { results, .. } => {
                     self.search_tab = SearchTab::All;
                     self.results = Some(results);
                     self.search_loading = false;
@@ -795,8 +799,15 @@ impl App {
                         self.playback_failed(message);
                     }
                 }
+                Ev::SessionExpired => {
+                    if self.user.is_some() {
+                        self.logout();
+                        self.toast("Your TIDAL session has expired. Please sign in again.".into());
+                    }
+                }
                 Ev::Error(message) => {
-                    self.loading = None;
+                    // (not `self.loading`: an unrelated failure, say of a search, must not drop the
+                    // song that is loading right now; a failed stream comes as `StreamFailed`)
                     if self.import.as_ref().is_some_and(|s| !s.loaded) {
                         // reading the playlist failed: leave the import view
                         self.import = None;
@@ -1894,7 +1905,12 @@ impl App {
         self.playing = false;
         self.audio.send(AudioCmd::Stop);
         self.discord.send(DiscordCmd::Clear);
-        self.toast("Signed out. Restart to sign in again.".into());
+        // the network side forgets the tokens too (requests under way can no longer use them)
+        self.net.send(Cmd::Logout);
+        self.device_code = None;
+        self.login_busy = false;
+        self.loading = None;
+        self.toast("Signed out".into());
     }
 
     // ------------------------------------------------------------------ draw

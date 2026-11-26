@@ -1,5 +1,7 @@
 //! TIDAL API client.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
@@ -85,34 +87,63 @@ pub enum Poll {
     Done(Box<Tokens>),
 }
 
-/// Qualities tried in this order.
-const QUALITIES: [&str; 3] = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH"];
+/// Qualities from best to smallest.
+const QUALITIES: [&str; 4] = ["HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"];
 
+/// The sign-in could not be renewed (it was revoked or has run out): the user has to sign in again.
+#[derive(Debug, thiserror::Error)]
+#[error("Your TIDAL session has expired. Please sign in again.")]
+pub struct SessionExpired;
+
+/// Is `error` (or anything it was caused by) an expired session?
+pub fn is_session_expired(error: &anyhow::Error) -> bool {
+    error.chain().any(|e| e.is::<SessionExpired>())
+}
+
+/// The tokens, shared by every copy of the client (a refresh by one is seen by all).
+#[derive(Default)]
+struct Auth {
+    access: String,
+    refresh: String,
+}
+
+/// Called with the new tokens after every successful refresh (so they can be saved).
+pub type TokenSink = Arc<dyn Fn(Tokens) + Send + Sync>;
+
+/// Cheap to clone: the copies share the HTTP connection pool and the sign-in, so requests can
+/// run side by side (a song starts while an artist page is still loading).
+#[derive(Clone)]
 pub struct TidalClient {
     http: reqwest::Client,
-    access_token: String,
-    refresh_token: String,
+    auth: Arc<RwLock<Auth>>,
+    /// Only one refresh at a time; the others wait for its result.
+    refreshing: Arc<tokio::sync::Mutex<()>>,
     pub user_id: Option<u64>,
     pub country_code: String,
     /// Whether to try hi-res streams (cleared once they turn out unreadable).
-    hires: bool,
+    hires: Arc<AtomicBool>,
+    /// Index into `QUALITIES` of the best quality to ask for.
+    max_quality: Arc<AtomicUsize>,
+    on_tokens: Option<TokenSink>,
 }
 
 impl TidalClient {
     pub fn new(country_code: String) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .user_agent("oxytide/0.1")
+            .user_agent(concat!("oxytide/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()
             .context("building HTTP client")?;
         Ok(Self {
             http,
-            access_token: String::new(),
-            refresh_token: String::new(),
+            auth: Arc::default(),
+            refreshing: Arc::default(),
             user_id: None,
             country_code,
-            hires: true,
+            hires: Arc::new(AtomicBool::new(true)),
+            max_quality: Arc::new(AtomicUsize::new(0)),
+            on_tokens: None,
         })
     }
 
@@ -120,22 +151,51 @@ impl TidalClient {
         self.http.clone()
     }
 
+    /// Where refreshed tokens are reported.
+    pub fn on_tokens(&mut self, sink: TokenSink) {
+        self.on_tokens = Some(sink);
+    }
+
+    /// The best quality to stream: `HI_RES_LOSSLESS`, `LOSSLESS`, `HIGH` or `LOW`.
+    pub fn set_max_quality(&self, quality: &str) {
+        let index = QUALITIES.iter().position(|q| *q == quality).unwrap_or(0);
+        self.max_quality.store(index, Ordering::Relaxed);
+    }
+
+    fn access(&self) -> String {
+        self.auth.read().map(|a| a.access.clone()).unwrap_or_default()
+    }
+
+    fn refresh_token(&self) -> String {
+        self.auth.read().map(|a| a.refresh.clone()).unwrap_or_default()
+    }
+
     pub fn set_tokens(&mut self, tokens: &Tokens) {
-        self.access_token = tokens.access_token.clone();
-        self.refresh_token = tokens.refresh_token.clone();
+        if let Ok(mut auth) = self.auth.write() {
+            auth.access = tokens.access_token.clone();
+            auth.refresh = tokens.refresh_token.clone();
+        }
         if tokens.user_id.is_some() {
             self.user_id = tokens.user_id;
         }
     }
 
+    /// Forget the sign-in (every copy of the client).
+    pub fn clear_tokens(&mut self) {
+        if let Ok(mut auth) = self.auth.write() {
+            *auth = Auth::default();
+        }
+        self.user_id = None;
+    }
+
     pub fn has_refresh_token(&self) -> bool {
-        !self.refresh_token.is_empty()
+        !self.refresh_token().is_empty()
     }
 
     pub fn current_tokens(&self) -> Tokens {
         Tokens {
-            access_token: self.access_token.clone(),
-            refresh_token: self.refresh_token.clone(),
+            access_token: self.access(),
+            refresh_token: self.refresh_token(),
             expires_in: 0,
             token_type: "Bearer".to_string(),
             user_id: self.user_id,
@@ -159,7 +219,7 @@ impl TidalClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(anyhow!("device_authorization failed ({status}): {body}"));
+            return Err(anyhow!("device_authorization failed ({status}): {}", truncate(&body, 200)));
         }
         serde_json::from_str(&body).context("parsing device_authorization")
     }
@@ -190,7 +250,7 @@ impl TidalClient {
             }
         }
         if !status.is_success() {
-            return Err(anyhow!("token poll failed ({status}): {body}"));
+            return Err(anyhow!("token poll failed ({status}): {}", truncate(&body, 200)));
         }
 
         let tokens: Tokens = serde_json::from_str(&body).context("parsing tokens")?;
@@ -198,14 +258,26 @@ impl TidalClient {
         Ok(Poll::Done(Box::new(tokens)))
     }
 
+    /// Get a new access token after `stale` was refused. If another copy of the client already
+    /// did that meanwhile, its result is used instead of asking TIDAL again.
+    async fn renew(&mut self, stale: &str) -> Result<()> {
+        let lock = self.refreshing.clone();
+        let _turn = lock.lock().await;
+        if self.access() != stale && !self.access().is_empty() {
+            return Ok(());
+        }
+        self.refresh().await.map(|_| ())
+    }
+
     pub async fn refresh(&mut self) -> Result<Tokens> {
-        if self.refresh_token.is_empty() {
+        let refresh_token = self.refresh_token();
+        if refresh_token.is_empty() {
             return Err(anyhow!("no refresh token"));
         }
         let form = [
             ("client_id", CLIENT_ID),
             ("client_secret", CLIENT_SECRET),
-            ("refresh_token", self.refresh_token.as_str()),
+            ("refresh_token", refresh_token.as_str()),
             ("grant_type", "refresh_token"),
             ("scope", "r_usr w_usr w_sub"),
         ];
@@ -218,24 +290,34 @@ impl TidalClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(anyhow!("token refresh failed ({status}): {body}"));
+            // the refresh token itself was refused: only a new sign-in helps
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || (status == reqwest::StatusCode::BAD_REQUEST && body.contains("invalid_grant"))
+            {
+                return Err(anyhow::Error::new(SessionExpired));
+            }
+            return Err(anyhow!("token refresh failed ({status}): {}", truncate(&body, 200)));
         }
         let tokens: Tokens = serde_json::from_str(&body).context("parsing refreshed tokens")?;
-        let old_refresh = self.refresh_token.clone();
-        let old_user = self.user_id;
-        self.access_token = tokens.access_token.clone();
-        if !tokens.refresh_token.is_empty() {
-            self.refresh_token = tokens.refresh_token.clone();
+        if tokens.access_token.is_empty() {
+            return Err(anyhow!("token refresh returned no access token"));
         }
         let merged = Tokens {
-            refresh_token: if tokens.refresh_token.is_empty() {
-                old_refresh
-            } else {
-                tokens.refresh_token
-            },
-            user_id: tokens.user_id.or(old_user),
+            refresh_token: if tokens.refresh_token.is_empty() { refresh_token } else { tokens.refresh_token.clone() },
+            user_id: tokens.user_id.or(self.user_id),
             ..tokens
         };
+        if let Ok(mut auth) = self.auth.write() {
+            // signed out while the refresh was under way: don't bring the old sign-in back
+            if auth.refresh.is_empty() {
+                return Err(anyhow!("signed out"));
+            }
+            auth.access = merged.access_token.clone();
+            auth.refresh = merged.refresh_token.clone();
+        }
+        if let Some(sink) = &self.on_tokens {
+            sink(merged.clone());
+        }
         Ok(merged)
     }
 
@@ -245,12 +327,13 @@ impl TidalClient {
     async fn get_value(&mut self, url: &str, query: &[(&str, &str)]) -> Result<Value> {
         let mut refreshed = false;
         loop {
+            let token = self.access();
             let mut req = self.http.get(url).query(query);
             if url.contains("/v2/") {
                 req = req.header("x-tidal-client-version", CLIENT_VERSION);
             }
-            if !self.access_token.is_empty() {
-                req = req.header("Authorization", format!("Bearer {}", self.access_token));
+            if !token.is_empty() {
+                req = req.header("Authorization", format!("Bearer {token}"));
             }
             let resp = req.send().await?;
             let status = resp.status();
@@ -261,7 +344,7 @@ impl TidalClient {
                 }
                 if !refreshed && self.has_refresh_token() {
                     refreshed = true;
-                    self.refresh().await?;
+                    self.renew(&token).await?;
                     continue;
                 }
                 return Err(anyhow!("HTTP {status} for {url}: {}", truncate(&body, 200)));
@@ -284,10 +367,11 @@ impl TidalClient {
     ) -> Result<String> {
         let mut refreshed = false;
         loop {
+            let token = self.access();
             let mut req = self
                 .http
                 .request(method.clone(), url)
-                .header("Authorization", format!("Bearer {}", self.access_token));
+                .header("Authorization", format!("Bearer {token}"));
             if !form.is_empty() {
                 req = req.form(form);
             }
@@ -299,7 +383,7 @@ impl TidalClient {
             let body = resp.text().await.unwrap_or_default();
             if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed && self.has_refresh_token() {
                 refreshed = true;
-                self.refresh().await?;
+                self.renew(&token).await?;
                 continue;
             }
             if !status.is_success() {
@@ -337,16 +421,17 @@ impl TidalClient {
         let cc = self.country_code.clone();
         let mut refreshed = false;
         loop {
+            let token = self.access();
             let resp = self
                 .http
                 .get(format!("{API_URL}/playlists/{uuid}"))
                 .query(&[("countryCode", &cc)])
-                .header("Authorization", format!("Bearer {}", self.access_token))
+                .header("Authorization", format!("Bearer {token}"))
                 .send()
                 .await?;
             if resp.status() == reqwest::StatusCode::UNAUTHORIZED && !refreshed && self.has_refresh_token() {
                 refreshed = true;
-                self.refresh().await?;
+                self.renew(&token).await?;
                 continue;
             }
             if !resp.status().is_success() {
@@ -379,10 +464,11 @@ impl TidalClient {
     async fn openapi(&mut self, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let mut refreshed = false;
         loop {
+            let token = self.access();
             let mut req = self
                 .http
                 .request(method.clone(), format!("{OPENAPI_URL}{path}"))
-                .header("Authorization", format!("Bearer {}", self.access_token))
+                .header("Authorization", format!("Bearer {token}"))
                 .header("x-tidal-client-version", CLIENT_VERSION)
                 .query(&[("countryCode", self.country_code.as_str())]);
             if let Some(body) = body {
@@ -393,7 +479,7 @@ impl TidalClient {
             let text = resp.text().await.unwrap_or_default();
             if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed && self.has_refresh_token() {
                 refreshed = true;
-                self.refresh().await?;
+                self.renew(&token).await?;
                 continue;
             }
             if !status.is_success() {
@@ -643,17 +729,24 @@ impl TidalClient {
 
     pub async fn user_playlists(&mut self, user_id: u64) -> Result<Vec<Playlist>> {
         let cc = self.country_code.clone();
-        let value = self
-            .get_value(
-                &format!("{API_URL}/users/{user_id}/playlists"),
-                &[("countryCode", &cc), ("limit", "100"), ("offset", "0")],
-            )
-            .await?;
-        let items = value
-            .get("items")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        let mut items: Vec<Value> = Vec::new();
+        // in pages of 100 (people with more playlists than that saw only the first 100)
+        for page in 0..20u32 {
+            let offset = (page * 100).to_string();
+            let value = self
+                .get_value(
+                    &format!("{API_URL}/users/{user_id}/playlists"),
+                    &[("countryCode", &cc), ("limit", "100"), ("offset", &offset)],
+                )
+                .await?;
+            let batch = value.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+            let fetched = batch.len();
+            items.extend(batch);
+            let total = value.get("totalNumberOfItems").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if fetched < 100 || items.len() >= total {
+                break;
+            }
+        }
         // Only playlists the user created themselves (not followed ones).
         Ok(items
             .into_iter()
@@ -1002,15 +1095,21 @@ impl TidalClient {
     /// skipped (for good, once seen) in favour of lossless FLAC.
     pub async fn stream_info(&mut self, track_id: u64) -> Result<StreamInfo> {
         let mut last = anyhow!("no stream available");
-        for quality in QUALITIES {
-            if quality == "HI_RES_LOSSLESS" && !self.hires {
+        // the chosen quality and below; the better ones only if none of those exists
+        let max = self.max_quality.load(Ordering::Relaxed).min(QUALITIES.len() - 1);
+        let order = QUALITIES[max..].iter().chain(QUALITIES[..max].iter().rev());
+        for &quality in order {
+            if quality == "HI_RES_LOSSLESS" && !self.hires.load(Ordering::Relaxed) {
                 continue;
             }
             match self.stream_info_at(track_id, quality).await {
                 Ok(info) => return Ok(info),
                 Err(e) => {
                     if quality == "HI_RES_LOSSLESS" && format!("{e:#}").contains("unsupported stream format") {
-                        self.hires = false;
+                        self.hires.store(false, Ordering::Relaxed);
+                    }
+                    if is_session_expired(&e) {
+                        return Err(e);
                     }
                     log::debug!("stream in {quality} unavailable: {e:#}");
                     last = e;

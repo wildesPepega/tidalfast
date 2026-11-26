@@ -1,7 +1,7 @@
 //! Small file helpers for data that must not be half written or readable by other users.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Write `bytes` to `path` so that it is either the old or the new file, never half of one, and
 /// (on Unix) readable only by this user. The folder is created (private, too) if needed.
@@ -58,7 +58,8 @@ pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
 /// A folder for sockets and scratch files that only this user can enter: `$XDG_RUNTIME_DIR`
 /// where there is one (it is private by definition), otherwise a folder of our own in the
 /// user's cache (never the shared temp folder, where another user could plant files).
-pub fn runtime_dir() -> PathBuf {
+#[cfg(unix)]
+pub fn runtime_dir() -> std::path::PathBuf {
     if let Some(dir) = dirs::runtime_dir() {
         return dir;
     }

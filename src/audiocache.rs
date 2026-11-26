@@ -186,6 +186,26 @@ impl Cache {
                 break;
             }
         }
+        let _ = fs::remove_file(self.loudness_file(track));
+    }
+
+    fn loudness_file(&self, track: u64) -> PathBuf {
+        self.dir.join(format!("{track}.gain"))
+    }
+
+    /// Keep the loudness of a song next to it (a cached song has no stream info to take it from).
+    pub fn store_loudness(&self, track: u64, loudness: crate::audio::Loudness) {
+        let text = format!("{} {}", loudness.gain_db, loudness.peak);
+        let _ = fs::create_dir_all(&self.dir);
+        let _ = fs::write(self.loudness_file(track), text);
+    }
+
+    pub fn loudness(&self, track: u64) -> Option<crate::audio::Loudness> {
+        let text = fs::read_to_string(self.loudness_file(track)).ok()?;
+        let mut parts = text.split_whitespace().map(|p| p.parse::<f32>().ok());
+        let gain_db = parts.next()??;
+        let peak = parts.next()??;
+        (gain_db.is_finite() && peak.is_finite()).then_some(crate::audio::Loudness { gain_db, peak })
     }
 
     /// (path, size, last used) of every cached song.
@@ -219,6 +239,11 @@ impl Cache {
             }
             if fs::remove_file(&path).is_ok() {
                 total = total.saturating_sub(len);
+                // and the song's loudness (`<id>.gain` next to `<id>-<quality>.audio`)
+                let id = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.split('-').next()).and_then(|n| n.parse::<u64>().ok());
+                if let Some(id) = id {
+                    let _ = fs::remove_file(self.loudness_file(id));
+                }
             }
         }
     }
@@ -301,6 +326,19 @@ mod tests {
         c.store(7, "HI_RES_LOSSLESS", b"newer and bigger");
         assert_eq!(c.entries().len(), 1);
         assert_eq!(c.read(7).unwrap().1, "HI_RES_LOSSLESS");
+        c.clear();
+    }
+
+    #[test]
+    fn loudness_is_kept_with_the_song_and_goes_with_it() {
+        let c = Cache::at(scratch("loudness"));
+        c.store(3, "LOSSLESS", b"song");
+        assert!(c.loudness(3).is_none());
+        c.store_loudness(3, crate::audio::Loudness { gain_db: -7.5, peak: 0.98 });
+        let l = c.loudness(3).unwrap();
+        assert_eq!((l.gain_db, l.peak), (-7.5, 0.98));
+        c.remove(3);
+        assert!(c.loudness(3).is_none());
         c.clear();
     }
 

@@ -296,6 +296,11 @@ pub struct StreamInfo {
     pub bit_depth: Option<u32>,
     #[serde(default)]
     pub sample_rate: Option<u32>,
+    /// ReplayGain of the track (dB) and its peak (1.0 = full scale), for volume normalization.
+    #[serde(default)]
+    pub replay_gain: Option<f32>,
+    #[serde(default)]
+    pub peak: Option<f32>,
 }
 
 /// Turn `https://resources.tidal.com/images/<uuid>/<size>.jpg` from a raw

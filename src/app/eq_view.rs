@@ -627,7 +627,7 @@ fn fader(
         p.rect_filled(rect.shrink2(vec2(2.0, 0.0)), CornerRadius::same(6), with_alpha(color, 16));
     }
     // ticks
-    let step = if range > 12.5 { 3.0 } else { 3.0 };
+    let step = 3.0;
     let mut db = -range;
     while db <= range + 0.01 {
         let y = y_of(db);

@@ -80,6 +80,10 @@ pub struct Settings {
     pub transition: TransitionMode,
     /// Crossfade length in seconds.
     pub crossfade_secs: f32,
+    /// Make songs about equally loud (TIDAL's ReplayGain values).
+    pub normalize: bool,
+    /// The best quality to stream (less needs less data).
+    pub stream_quality: StreamQuality,
 
     pub eq: EqSettings,
     pub recent_searches: Vec<String>,
@@ -96,6 +100,29 @@ pub struct Settings {
     pub last_source: Option<String>,
     /// Which search hint the last start showed (the next start shows another one).
     pub last_search_hint: usize,
+}
+
+/// The best stream quality to ask TIDAL for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum StreamQuality {
+    /// The best there is (in practice lossless FLAC, about 1 GB per 10 hours more than High).
+    #[default]
+    Lossless,
+    /// AAC, 320 kbit/s.
+    High,
+    /// AAC, 96 kbit/s (for slow or metered connections).
+    Low,
+}
+
+impl StreamQuality {
+    /// TIDAL's name of the best quality to try.
+    pub fn api(self) -> &'static str {
+        match self {
+            StreamQuality::Lossless => "HI_RES_LOSSLESS",
+            StreamQuality::High => "HIGH",
+            StreamQuality::Low => "LOW",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +175,8 @@ impl Default for Settings {
             close_to_tray: false,
             transition: TransitionMode::Off,
             crossfade_secs: 6.0,
+            normalize: true,
+            stream_quality: StreamQuality::Lossless,
             eq: EqSettings::default(),
             recent_searches: Vec::new(),
             sidebar_expanded: false,

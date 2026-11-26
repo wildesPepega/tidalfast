@@ -19,6 +19,30 @@ use crate::eq::{EqShared, EqSource};
 use crate::model::Track;
 use crate::transition::{self, Fader, GainCtl, Plan, Transition};
 
+/// How loud a song is mastered (from TIDAL), for volume normalization.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Loudness {
+    /// ReplayGain: how much to change the level so songs sound equally loud (dB).
+    pub gain_db: f32,
+    /// The loudest sample (1.0 = full scale); the gain never pushes it past that.
+    pub peak: f32,
+}
+
+impl Loudness {
+    pub fn from_stream(info: &crate::model::StreamInfo) -> Option<Self> {
+        let gain_db = info.replay_gain.filter(|g| g.is_finite())?;
+        let peak = info.peak.filter(|p| p.is_finite() && *p > 0.0).unwrap_or(1.0);
+        Some(Self { gain_db, peak })
+    }
+
+    /// The factor for the volume: the gain, limited so the peak does not clip.
+    pub fn factor(self) -> f32 {
+        let gain = 10f32.powf(self.gain_db.clamp(-24.0, 12.0) / 20.0);
+        let ceiling = if self.peak > 0.0 { 1.0 / self.peak } else { 1.0 };
+        gain.min(ceiling).clamp(0.05, 4.0)
+    }
+}
+
 pub enum AudioCmd {
     /// Play a track now (replaces whatever is playing).
     Load {
@@ -28,13 +52,19 @@ pub enum AudioCmd {
         quality: String,
         /// Begin this many seconds into the song (0: at the start).
         start_at: f64,
+        loudness: Option<Loudness>,
     },
     /// Get the next track ready; the engine switches to it on its own.
     Preload {
         url: String,
         track: Box<Track>,
         quality: String,
+        loudness: Option<Loudness>,
     },
+    /// Make all songs about equally loud (ReplayGain), or play them as mastered.
+    SetNormalize(bool),
+    /// Fade out and pause at this moment (`None`: no sleep timer).
+    SleepAt(Option<Instant>),
     /// Like `Load` / `Preload`, but from the disk cache (no stream URL needed).
     LoadCached {
         track: Box<Track>,
@@ -82,8 +112,14 @@ pub enum AudioEv {
         preload: bool,
     },
     Ended,
+    /// The sleep timer ran out and playback was faded out and paused (`ended`: the song ended
+    /// during the fade, nothing is loaded any more).
+    SleepDone { ended: bool },
     Error(String),
 }
+
+/// How long the music fades out when the sleep timer runs out.
+const SLEEP_FADE: Duration = Duration::from_secs(10);
 
 /// Handle used by the UI thread.
 pub struct Audio {
@@ -92,12 +128,12 @@ pub struct Audio {
 }
 
 impl Audio {
-    pub fn spawn(volume: f32, device: String, eq: Arc<EqShared>, transition: Transition) -> Self {
+    pub fn spawn(volume: f32, device: String, eq: Arc<EqShared>, transition: Transition, normalize: bool) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (ev_tx, ev_rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("oxytide-audio".into())
-            .spawn(move || audio_thread(cmd_rx, ev_tx, volume, device, eq, transition))
+            .spawn(move || audio_thread(cmd_rx, ev_tx, volume, device, eq, transition, normalize))
             .expect("spawn audio thread");
         Self {
             tx: cmd_tx,
@@ -124,6 +160,7 @@ struct Deck {
     duration: f64,
     /// Track time minus the player's clock (pre-roll silence).
     offset: f64,
+    loudness: Option<Loudness>,
 }
 
 impl Deck {
@@ -142,11 +179,13 @@ struct Pending {
     track: Box<Track>,
     quality: String,
     bytes: Option<Vec<u8>>,
+    loudness: Option<Loudness>,
 }
 
 /// Results of background work.
 enum Job {
-    Downloaded { id: u64, result: Result<Vec<u8>, String> },
+    /// `loudness`: found next to a cached song (a download already knows its own).
+    Downloaded { id: u64, result: Result<Vec<u8>, String>, loudness: Option<Loudness> },
     /// The track the user asked to play right now.
     Loaded {
         id: u64,
@@ -156,6 +195,7 @@ enum Job {
         play: bool,
         from_cache: bool,
         start_at: f64,
+        loudness: Option<Loudness>,
     },
     /// A cached song could not be read.
     Miss { id: u64, track_id: u64, preload: bool },
@@ -165,6 +205,7 @@ struct Engine {
     sink: Option<MixerDeviceSink>,
     device_name: String,
     volume: f32,
+    normalize: bool,
     eq: Arc<EqShared>,
     transition: Transition,
     cur: Option<Deck>,
@@ -177,15 +218,19 @@ struct Engine {
     jobs_rx: Receiver<Job>,
     next_id: u64,
     last_progress: Instant,
+    /// When the sleep timer runs out, and when its fade-out is over.
+    sleep_at: Option<Instant>,
+    sleep_fade: Option<Instant>,
 }
 
 impl Engine {
-    fn new(volume: f32, device_name: String, eq: Arc<EqShared>, transition: Transition) -> Self {
+    fn new(volume: f32, device_name: String, eq: Arc<EqShared>, transition: Transition, normalize: bool) -> Self {
         let (jobs_tx, jobs_rx) = mpsc::channel();
         Self {
             sink: None,
             device_name,
             volume,
+            normalize,
             eq,
             transition,
             cur: None,
@@ -196,6 +241,61 @@ impl Engine {
             jobs_rx,
             next_id: 0,
             last_progress: Instant::now(),
+            sleep_at: None,
+            sleep_fade: None,
+        }
+    }
+
+    /// The sleep timer: start the fade when it is due, pause when the fade is over.
+    fn tick_sleep(&mut self, ev: &Sender<AudioEv>) {
+        let now = Instant::now();
+        if self.sleep_at.is_some_and(|at| now >= at) {
+            self.sleep_at = None;
+            match &self.cur {
+                Some(cur) if !cur.player.is_paused() => {
+                    cur.gain.fade_to(0.0, SLEEP_FADE.as_secs_f32(), 0.0);
+                    self.next = None;
+                    self.sleep_fade = Some(now + SLEEP_FADE);
+                }
+                // nothing plays: nothing to stop
+                _ => {
+                    let _ = ev.send(AudioEv::SleepDone { ended: self.cur.is_none() });
+                }
+            }
+        }
+        if self.sleep_fade.is_some_and(|end| now >= end) {
+            self.finish_sleep(ev);
+        }
+    }
+
+    /// End the sleep fade: pause, and the next play is at full level again.
+    fn finish_sleep(&mut self, ev: &Sender<AudioEv>) {
+        self.sleep_fade = None;
+        for old in self.fading.drain(..) {
+            old.player.stop();
+        }
+        if let Some(cur) = &self.cur {
+            cur.player.pause();
+            cur.gain.fade_to(1.0, 0.0, 0.0);
+            let _ = ev.send(AudioEv::Paused(true));
+        }
+        let _ = ev.send(AudioEv::SleepDone { ended: self.cur.is_none() });
+    }
+
+    /// Something new is played: a sleep fade under way is over.
+    fn cancel_sleep_fade(&mut self) {
+        self.sleep_fade = None;
+    }
+
+    /// The player volume for a song: the user's volume, and its normalization if that is on.
+    fn volume_for(&self, loudness: Option<Loudness>) -> f32 {
+        let factor = if self.normalize { loudness.map_or(1.0, Loudness::factor) } else { 1.0 };
+        (self.volume * factor).clamp(0.0, 4.0)
+    }
+
+    fn apply_volume(&self) {
+        for deck in self.cur.iter().chain(self.fading.iter()) {
+            deck.player.set_volume(self.volume_for(deck.loudness));
         }
     }
 
@@ -221,6 +321,7 @@ impl Engine {
         quality: String,
         start_gain: f32,
         pre_roll: f64,
+        loudness: Option<Loudness>,
     ) -> Result<Deck> {
         self.ensure_device()?;
         let decoder = Decoder::new(Cursor::new(bytes)).map_err(|e| anyhow!("decode failed: {e}"))?;
@@ -229,7 +330,7 @@ impl Engine {
         let source = EqSource::new(Fader::new(decoder, gain.clone(), pre_roll), self.eq.clone());
         let player = Player::connect_new(self.sink.as_ref().unwrap().mixer());
         player.pause();
-        player.set_volume(self.volume);
+        player.set_volume(self.volume_for(loudness));
         player.append(source);
         Ok(Deck {
             id: self.new_id(),
@@ -239,21 +340,22 @@ impl Engine {
             quality,
             duration,
             offset: -pre_roll,
+            loudness,
         })
     }
 
     /// Start playing `track` as soon as its audio has downloaded. The
     /// download runs in the background, so the engine stays responsive and
     /// a newer `Load` simply replaces this one.
-    fn load(&mut self, url: String, track: Box<Track>, quality: String, play: bool, start_at: f64) {
+    fn load(&mut self, url: String, track: Box<Track>, quality: String, play: bool, start_at: f64, loudness: Option<Loudness>) {
         self.stop_all();
         self.next = None;
         let id = self.new_id();
         self.loading = Some(id);
         let tx = self.jobs_tx.clone();
         std::thread::spawn(move || {
-            let result = fetch(&url, track.id, &quality).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Job::Loaded { id, result, track, quality, play, from_cache: false, start_at });
+            let result = fetch(&url, track.id, &quality, loudness).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Job::Loaded { id, result, track, quality, play, from_cache: false, start_at, loudness });
         });
     }
 
@@ -265,8 +367,12 @@ impl Engine {
         self.loading = Some(id);
         let tx = self.jobs_tx.clone();
         std::thread::spawn(move || {
-            let job = match crate::audiocache::global().and_then(|c| c.read(track.id)) {
-                Some((bytes, quality)) => Job::Loaded { id, result: Ok(bytes), track, quality, play, from_cache: true, start_at },
+            let cache = crate::audiocache::global();
+            let job = match cache.as_ref().and_then(|c| c.read(track.id)) {
+                Some((bytes, quality)) => {
+                    let loudness = cache.as_ref().and_then(|c| c.loudness(track.id));
+                    Job::Loaded { id, result: Ok(bytes), track, quality, play, from_cache: true, start_at, loudness }
+                }
                 None => Job::Miss { id, track_id: track.id, preload: false },
             };
             let _ = tx.send(job);
@@ -276,26 +382,26 @@ impl Engine {
     fn preload_cached(&mut self, track: Box<Track>) {
         let id = self.new_id();
         let quality = crate::audiocache::global().and_then(|c| c.find(track.id)).map(|(_, q)| q).unwrap_or_default();
-        self.next = Some(Pending { id, track: track.clone(), quality, bytes: None });
+        self.next = Some(Pending { id, track: track.clone(), quality, bytes: None, loudness: None });
         let tx = self.jobs_tx.clone();
         std::thread::spawn(move || {
-            let job = match crate::audiocache::global().and_then(|c| c.read(track.id)) {
-                Some((bytes, _)) => Job::Downloaded { id, result: Ok(bytes) },
+            let cache = crate::audiocache::global();
+            let job = match cache.as_ref().and_then(|c| c.read(track.id)) {
+                Some((bytes, _)) => Job::Downloaded { id, result: Ok(bytes), loudness: cache.as_ref().and_then(|c| c.loudness(track.id)) },
                 None => Job::Miss { id, track_id: track.id, preload: true },
             };
             let _ = tx.send(job);
         });
     }
 
-    fn preload(&mut self, url: String, track: Box<Track>, quality: String) {
+    fn preload(&mut self, url: String, track: Box<Track>, quality: String, loudness: Option<Loudness>) {
         let id = self.new_id();
-        self.next = Some(Pending { id, track, quality, bytes: None });
+        let track_id = track.id;
+        self.next = Some(Pending { id, track, quality: quality.clone(), bytes: None, loudness });
         let tx = self.jobs_tx.clone();
-        let track_id = self.next.as_ref().map(|n| n.track.id).unwrap_or(0);
-        let quality = self.next.as_ref().map(|n| n.quality.clone()).unwrap_or_default();
         std::thread::spawn(move || {
-            let result = fetch(&url, track_id, &quality).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Job::Downloaded { id, result });
+            let result = fetch(&url, track_id, &quality, loudness).map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Job::Downloaded { id, result, loudness: None });
         });
     }
 
@@ -313,7 +419,7 @@ impl Engine {
                 }
                 let _ = ev.send(AudioEv::CacheMiss { track_id, preload });
             }
-            Job::Loaded { id, result, track, quality, play, from_cache, start_at } => {
+            Job::Loaded { id, result, track, quality, play, from_cache, start_at, loudness } => {
                 let track_id = track.id;
                 if self.loading != Some(id) {
                     return;
@@ -321,7 +427,7 @@ impl Engine {
                 self.loading = None;
                 let deck = result
                     .map_err(|e| anyhow!(e))
-                    .and_then(|bytes| self.new_deck(bytes, track, quality, 1.0, 0.0));
+                    .and_then(|bytes| self.new_deck(bytes, track, quality, 1.0, 0.0, loudness));
                 match deck {
                     Ok(mut deck) => {
                         // a song that is picked up again: be at its place before the first sound
@@ -358,7 +464,7 @@ impl Engine {
                     }
                 }
             }
-            Job::Downloaded { id, result } => {
+            Job::Downloaded { id, result, loudness } => {
                 if self.next.as_ref().map(|n| n.id) != Some(id) {
                     return;
                 }
@@ -366,6 +472,9 @@ impl Engine {
                     Ok(bytes) => {
                         if let Some(next) = &mut self.next {
                             next.bytes = Some(bytes);
+                            if loudness.is_some() {
+                                next.loudness = loudness;
+                            }
                         }
                     }
                     Err(e) => {
@@ -384,7 +493,7 @@ impl Engine {
         let Some(bytes) = pending.bytes else { return };
         let fade = plan.fade;
         let start = if fade > 0.0 { 0.0 } else { 1.0 };
-        let deck = self.new_deck(bytes, pending.track, pending.quality, start, pre_roll);
+        let deck = self.new_deck(bytes, pending.track, pending.quality, start, pre_roll, pending.loudness);
         let mut deck = match deck {
             Ok(deck) => deck,
             Err(e) => {
@@ -429,16 +538,24 @@ impl Engine {
             !done
         });
 
+        self.tick_sleep(ev);
+
         let Some(cur) = &self.cur else { return };
         if cur.player.is_paused() {
             return;
         }
         let pos = cur.position();
         let ended = cur.player.empty();
+        if ended && self.sleep_fade.is_some() {
+            // the song ended while the sleep timer faded it out: stop here
+            self.cur = None;
+            self.finish_sleep(ev);
+            return;
+        }
         let plan = self
             .next
             .as_ref()
-            .filter(|n| n.bytes.is_some())
+            .filter(|n| n.bytes.is_some() && self.sleep_fade.is_none())
             .map(|_| transition::plan(self.transition, cur.duration));
 
         if let Some(plan) = plan {
@@ -488,8 +605,9 @@ fn audio_thread(
     device: String,
     eq: Arc<EqShared>,
     transition: Transition,
+    normalize: bool,
 ) {
-    let mut engine = Engine::new(volume, device, eq, transition);
+    let mut engine = Engine::new(volume, device, eq, transition, normalize);
     let _ = ev.send(AudioEv::Devices(list_devices()));
 
     loop {
@@ -512,14 +630,37 @@ fn handle(cmd: AudioCmd, engine: &mut Engine, ev: &Sender<AudioEv>) {
             play,
             quality,
             start_at,
-        } => engine.load(url, track, quality, play, start_at),
-        AudioCmd::Preload { url, track, quality } => engine.preload(url, track, quality),
-        AudioCmd::LoadCached { track, play, start_at } => engine.load_cached(track, play, start_at),
+            loudness,
+        } => {
+            engine.cancel_sleep_fade();
+            engine.load(url, track, quality, play, start_at, loudness)
+        }
+        AudioCmd::Preload { url, track, quality, loudness } => engine.preload(url, track, quality, loudness),
+        AudioCmd::SetNormalize(on) => {
+            engine.normalize = on;
+            engine.apply_volume();
+        }
+        AudioCmd::LoadCached { track, play, start_at } => {
+            engine.cancel_sleep_fade();
+            engine.load_cached(track, play, start_at)
+        }
+        AudioCmd::SleepAt(at) => {
+            engine.sleep_at = at;
+            if at.is_none() && engine.sleep_fade.is_some() {
+                // switched off during the fade: back to full level
+                engine.sleep_fade = None;
+                if let Some(cur) = &engine.cur {
+                    cur.gain.fade_to(1.0, 1.0, 0.0);
+                }
+            }
+        }
         AudioCmd::PreloadCached { track } => engine.preload_cached(track),
         AudioCmd::ClearPreload => engine.next = None,
         AudioCmd::SetTransition(t) => {
             engine.transition = t;
         }
+        AudioCmd::Pause if engine.sleep_fade.is_some() => engine.finish_sleep(ev),
+        AudioCmd::Toggle if engine.sleep_fade.is_some() => engine.finish_sleep(ev),
         AudioCmd::Pause => {
             if engine.cur.is_some() {
                 for player in engine.players() {
@@ -542,6 +683,7 @@ fn handle(cmd: AudioCmd, engine: &mut Engine, ev: &Sender<AudioEv>) {
             }
         }
         AudioCmd::Halt => {
+            engine.cancel_sleep_fade();
             engine.next = None;
             engine.loading = None;
             engine.stop_all();
@@ -565,9 +707,7 @@ fn handle(cmd: AudioCmd, engine: &mut Engine, ev: &Sender<AudioEv>) {
         }
         AudioCmd::SetVolume(v) => {
             engine.volume = v;
-            for player in engine.players() {
-                player.set_volume(v);
-            }
+            engine.apply_volume();
         }
         AudioCmd::SetDevice(name) => {
             engine.device_name = name;
@@ -687,11 +827,14 @@ fn open_device(name: &str) -> Result<MixerDeviceSink> {
 }
 
 /// Download a song and keep a copy in the cache.
-fn fetch(url: &str, track_id: u64, quality: &str) -> Result<Vec<u8>> {
+fn fetch(url: &str, track_id: u64, quality: &str, loudness: Option<Loudness>) -> Result<Vec<u8>> {
     let bytes = download(url)?;
     if crate::audiocache::enabled() && track_id != 0 {
         if let Some(cache) = crate::audiocache::global() {
             cache.store(track_id, quality, &bytes);
+            if let Some(loudness) = loudness {
+                cache.store_loudness(track_id, loudness);
+            }
             cache.prune_to_limit();
         }
     }
@@ -712,6 +855,21 @@ fn download(url: &str) -> Result<Vec<u8>> {
         ));
     }
     Ok(resp.bytes().context("reading audio data")?.to_vec())
+}
+
+#[cfg(test)]
+mod loudness_tests {
+    use super::Loudness;
+
+    #[test]
+    fn the_gain_is_applied_but_never_past_the_peak() {
+        let quiet_down = Loudness { gain_db: -6.0, peak: 1.0 }.factor();
+        assert!((quiet_down - 0.501).abs() < 0.01, "{quiet_down}");
+        // +6 dB would clip a song whose peak is already at 0.9: it stops at 1/0.9
+        let boost = Loudness { gain_db: 6.0, peak: 0.9 }.factor();
+        assert!((boost - 1.0 / 0.9).abs() < 0.001, "{boost}");
+        assert!(Loudness { gain_db: 40.0, peak: 0.01 }.factor() <= 4.0);
+    }
 }
 
 #[cfg(test)]
@@ -746,7 +904,7 @@ mod cache_tests {
         crate::audiocache::configure(true, 1 << 30);
         let url = serve(vec![7u8; 5000]);
 
-        let bytes = fetch(&url, 31337, "LOSSLESS").unwrap();
+        let bytes = fetch(&url, 31337, "LOSSLESS", None).unwrap();
         assert_eq!(bytes.len(), 5000);
         let cache = crate::audiocache::global().unwrap();
         let (cached, quality) = cache.read(31337).expect("kept");
@@ -754,7 +912,7 @@ mod cache_tests {
 
         // switched off: nothing is kept
         crate::audiocache::configure(false, 1 << 30);
-        fetch(&url, 99, "LOSSLESS").unwrap();
+        fetch(&url, 99, "LOSSLESS", None).unwrap();
         assert!(!cache.has(99));
         crate::audiocache::configure(true, 1 << 30);
         cache.clear();

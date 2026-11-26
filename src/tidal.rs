@@ -1181,6 +1181,8 @@ impl TidalClient {
                 .get("sampleRate")
                 .and_then(Value::as_u64)
                 .map(|v| v as u32),
+            replay_gain: value.get("trackReplayGain").and_then(Value::as_f64).map(|v| v as f32),
+            peak: value.get("trackPeakAmplitude").and_then(Value::as_f64).map(|v| v as f32),
         })
     }
 }

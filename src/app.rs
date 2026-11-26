@@ -29,6 +29,15 @@ use crate::ui::{
 const COVER_ROW: u32 = 160;
 const COVER_NOW: u32 = 320;
 
+/// The sleep timer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sleep {
+    /// Fade out and pause at this moment.
+    At(Instant),
+    /// Stop when the current song is over.
+    EndOfTrack,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Search,
@@ -261,6 +270,7 @@ pub struct App {
     now_quality: String,
     /// Track whose stream is being resolved and loaded (rapid skips drop older ones).
     loading: Option<u64>,
+    sleep: Option<Sleep>,
     /// Tracks in a row that could not be played.
     stream_failures: u32,
     /// The song of the last session and where it stopped: play continues from there.
@@ -270,9 +280,9 @@ pub struct App {
     /// When the playing position was last written to the settings.
     position_saved: Instant,
     /// What the song cache takes on disk, and when that was measured.
-    cache_size: Option<(u64, Instant)>,
+    cache_size: Measured,
     /// All caches together, for the System page.
-    cache_total: Option<(u64, Instant)>,
+    cache_total: Measured,
     /// Start the song that is being loaded as soon as it is ready (a pause meanwhile clears this).
     autoplay: bool,
     scrub: f64,
@@ -386,8 +396,9 @@ impl App {
             user_id: cfg.user_id,
         };
         let net = Net::spawn(cfg.country_code.clone(), tokens).expect("start network worker");
+        net.send(Cmd::SetQuality(cfg.stream_quality.api().to_string()));
         let eq_shared = EqShared::new(cfg.eq.clone());
-        let audio = Audio::spawn(cfg.volume, cfg.output_device.clone(), eq_shared.clone(), cfg.transition());
+        let audio = Audio::spawn(cfg.volume, cfg.output_device.clone(), eq_shared.clone(), cfg.transition(), cfg.normalize);
         audiocache::configure(cfg.cache_audio, (cfg.cache_limit_gb.clamp(0.1, 100.0) as f64 * 1e9) as u64);
         let discord = Discord::spawn(cfg.discord);
         discord.send(DiscordCmd::KeepWhenPaused(cfg.discord_when_paused));
@@ -452,11 +463,12 @@ impl App {
             now_quality: String::new(),
             loading: None,
             stream_failures: 0,
+            sleep: None,
             resume: None,
             start_seek: None,
             position_saved: Instant::now(),
-            cache_size: None,
-            cache_total: None,
+            cache_size: Measured::default(),
+            cache_total: Measured::default(),
             autoplay: true,
             scrub: 0.0,
             scrubbing: false,
@@ -695,6 +707,7 @@ impl App {
                         if id == track_id {
                             if let Some(track) = self.queue.get(idx).cloned() {
                                 self.audio.send(AudioCmd::Preload {
+                                    loudness: crate::audio::Loudness::from_stream(&info),
                                     url: info.url,
                                     track: Box::new(track),
                                     quality: info.audio_quality.unwrap_or_default(),
@@ -709,6 +722,7 @@ impl App {
                         let track = self.current.clone().unwrap();
                         let quality = info.audio_quality.clone().unwrap_or_default();
                         self.audio.send(AudioCmd::Load {
+                            loudness: crate::audio::Loudness::from_stream(&info),
                             url: info.url,
                             track: Box::new(track.clone()),
                             play: self.autoplay,
@@ -931,8 +945,23 @@ impl App {
                 }
                 AudioEv::Ended => {
                     if self.loading.is_none() {
-                        self.advance(true);
+                        if self.sleep == Some(Sleep::EndOfTrack) {
+                            self.sleep = None;
+                            self.stop_at_end();
+                            self.toast("Sleep timer: playback stopped".into());
+                        } else {
+                            self.advance(true);
+                        }
                     }
+                }
+                AudioEv::SleepDone { ended } => {
+                    self.sleep = None;
+                    if ended {
+                        self.stop_at_end();
+                    } else {
+                        self.playing = false;
+                    }
+                    self.toast("Sleep timer: playback stopped".into());
                 }
                 AudioEv::Error(message) => {
                     if self.loading.is_some() {
@@ -1264,6 +1293,13 @@ impl App {
         if self.current.is_none() || self.finished {
             return;
         }
+        // the sleep timer stops after this song: nothing may follow it
+        if self.sleep == Some(Sleep::EndOfTrack) {
+            if self.preload.take().is_some() {
+                self.audio.send(AudioCmd::ClearPreload);
+            }
+            return;
+        }
         let want = self
             .peek_next()
             .and_then(|(idx, pos)| self.queue.get(idx).map(|t| (idx, pos, t.id)));
@@ -1312,17 +1348,49 @@ impl App {
             }
             // the user pressing "next" on the last track: keep playing it
             None if !auto && !self.finished => self.toast("That was the last track in the queue".into()),
-            None => {
-                self.playing = false;
-                self.finished = true;
-                self.cfg.last_position = 0.0;
-                self.dirty = true;
-                self.audio.send(AudioCmd::Pause);
-                self.discord.send(DiscordCmd::SetPlaying {
-                    playing: false,
-                    position: self.position,
-                });
+            None => self.stop_at_end(),
+        }
+    }
+
+    /// The song is over and nothing follows: stop (pressing play starts it again).
+    fn stop_at_end(&mut self) {
+        self.playing = false;
+        self.finished = true;
+        self.cfg.last_position = 0.0;
+        self.dirty = true;
+        self.audio.send(AudioCmd::Pause);
+        self.discord.send(DiscordCmd::SetPlaying {
+            playing: false,
+            position: self.position,
+        });
+    }
+
+    /// Switch the sleep timer on (`minutes`, or `None` for the end of the song) or off.
+    fn set_sleep(&mut self, sleep: Option<Sleep>) {
+        self.sleep = sleep;
+        self.audio.send(AudioCmd::SleepAt(match sleep {
+            Some(Sleep::At(at)) => Some(at),
+            _ => None,
+        }));
+        match sleep {
+            Some(Sleep::At(at)) => {
+                let mins = (at.saturating_duration_since(Instant::now()).as_secs() + 30) / 60;
+                self.toast(format!("Sleep timer: music stops in {mins} min"));
             }
+            Some(Sleep::EndOfTrack) => self.toast("Sleep timer: music stops after this song".into()),
+            None => self.toast("Sleep timer off".into()),
+        }
+    }
+
+    /// What the sleep timer button says when hovered.
+    fn sleep_label(&self) -> String {
+        match self.sleep {
+            Some(Sleep::At(at)) => {
+                let left = at.saturating_duration_since(Instant::now()).as_secs();
+                format!("Sleep timer: {}:{:02} left", left / 60, left % 60)
+            }
+            Some(Sleep::EndOfTrack) => "Sleep timer: after this song".into(),
+            None => "Sleep timer".into(),
         }
     }
 
@@ -1910,6 +1978,8 @@ impl App {
         self.device_code = None;
         self.login_busy = false;
         self.loading = None;
+        self.sleep = None;
+        self.audio.send(AudioCmd::SleepAt(None));
         self.toast("Signed out".into());
     }
 
@@ -2396,6 +2466,8 @@ impl App {
             let ui = &mut right;
             ui.spacing_mut().item_spacing.x = 6.0;
             want_queue = !hide_queue && icon_button(ui, Icon::Queue, 30.0, self.queue_open).on_hover_text("Queue").clicked();
+            ui.add_space(2.0);
+            self.sleep_button(ui);
             ui.add_space(4.0);
             if !hide_volume {
             let mut vol = self.cfg.volume;
@@ -2470,6 +2542,55 @@ impl App {
         }
         if let Some(artist) = want_artist {
             self.open_artist(artist.id, Some(artist));
+        }
+    }
+
+    /// A moon in the player bar; its menu sets the sleep timer.
+    fn sleep_button(&mut self, ui: &mut egui::Ui) {
+        let on = self.sleep.is_some();
+        let color = if on { ui::accent() } else { TEXT_DIM };
+        let icon = if on { icons::MOON_STARS } else { icons::MOON };
+        let resp = ui
+            .add(egui::Label::new(RichText::new(icon).size(18.0).color(color)).sense(egui::Sense::click()))
+            .on_hover_text(self.sleep_label());
+        pointer_on_hover(&resp);
+        if on {
+            // the remaining time in the tooltip counts down
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
+        let popup = egui::Id::new("sleep_timer_menu");
+        if resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup));
+        }
+        let mut pick: Option<Option<Sleep>> = None;
+        egui::popup_above_or_below_widget(
+            ui,
+            popup,
+            &resp,
+            egui::AboveOrBelow::Above,
+            egui::PopupCloseBehavior::CloseOnClick,
+            |ui| {
+                ui.set_min_width(190.0);
+                ui.label(RichText::new("Stop playing in").size(12.0).color(TEXT_DIM));
+                for mins in [15u64, 30, 45, 60, 90] {
+                    if ui.selectable_label(false, format!("{mins} minutes")).clicked() {
+                        pick = Some(Some(Sleep::At(Instant::now() + Duration::from_secs(mins * 60))));
+                    }
+                }
+                let end = self.sleep == Some(Sleep::EndOfTrack);
+                if ui.selectable_label(end, "End of this song").clicked() {
+                    pick = Some(Some(Sleep::EndOfTrack));
+                }
+                if self.sleep.is_some() {
+                    ui.separator();
+                    if ui.selectable_label(false, "Turn off").clicked() {
+                        pick = Some(None);
+                    }
+                }
+            },
+        );
+        if let Some(sleep) = pick {
+            self.set_sleep(sleep);
         }
     }
 
@@ -3988,6 +4109,8 @@ impl App {
                 ui.add_space(8.0);
 
                 ui.add_space(10.0);
+                self.quality_settings(ui);
+                ui.add_space(10.0);
                 self.transition_settings(ui);
                 ui.add_space(10.0);
                 self.cache_settings(ui);
@@ -4652,11 +4775,7 @@ impl App {
             }
         }
         // what it takes now (measured every few seconds while this page is open)
-        if self.cache_size.map_or(true, |(_, at)| at.elapsed() > Duration::from_secs(3)) {
-            let size = audiocache::global().map_or(0, |c| c.size());
-            self.cache_size = Some((size, Instant::now()));
-        }
-        let size = self.cache_size.map_or(0, |(s, _)| s);
+        let size = self.cache_size.get(|| audiocache::global().map_or(0, |c| c.size()));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Using {}", human_bytes(size))).color(TEXT_DIM));
@@ -4664,7 +4783,7 @@ impl App {
                 if let Some(cache) = audiocache::global() {
                     cache.clear();
                 }
-                self.cache_size = None;
+                self.cache_size.reset();
             }
         });
         ui.ctx().request_repaint_after(Duration::from_secs(3));
@@ -4673,10 +4792,7 @@ impl App {
     /// Everything that is kept on disk to start fast, with one button to throw it all away.
     fn cache_overview(&mut self, ui: &mut egui::Ui) {
         settings_label(ui, "Cache");
-        if self.cache_total.map_or(true, |(_, at)| at.elapsed() > Duration::from_secs(3)) {
-            self.cache_total = Some((crate::cache::total_size(), Instant::now()));
-        }
-        let total = self.cache_total.map_or(0, |(s, _)| s);
+        let total = self.cache_total.get(crate::cache::total_size);
         ui.label(
             RichText::new(format!(
                 "Songs, covers and lists that Oxytide keeps to start fast: {}. Nothing in it is needed; it is made again as you listen.",
@@ -4688,8 +4804,8 @@ impl App {
         ui.add_space(4.0);
         if action_button(ui, icons::TRASH, "Clear all caches", false).clicked() {
             crate::cache::clear_all();
-            self.cache_total = None;
-            self.cache_size = None;
+            self.cache_total.reset();
+            self.cache_size.reset();
             // what was shown from the cache is loaded again
             self.textures.clear();
             self.requested.clear();
@@ -4712,6 +4828,42 @@ impl App {
             });
         }
         self.touch();
+    }
+
+    fn quality_settings(&mut self, ui: &mut egui::Ui) {
+        use crate::config::StreamQuality;
+        settings_label(ui, "Streaming quality");
+        let before = self.cfg.stream_quality;
+        ui.horizontal(|ui| {
+            for (q, label) in [
+                (StreamQuality::Lossless, "Lossless"),
+                (StreamQuality::High, "High"),
+                (StreamQuality::Low, "Data saver"),
+            ] {
+                let width = 30.0 + label.chars().count() as f32 * 7.5;
+                if pill(ui, label, self.cfg.stream_quality == q, width).clicked() {
+                    self.cfg.stream_quality = q;
+                }
+            }
+        });
+        let help = match self.cfg.stream_quality {
+            StreamQuality::Lossless => "The best quality TIDAL has for each song (FLAC, CD quality or better). About 40 MB per song.",
+            StreamQuality::High => "AAC at 320 kbit/s: sounds nearly the same and needs about a quarter of the data.",
+            StreamQuality::Low => "AAC at 96 kbit/s, for slow or metered connections.",
+        };
+        ui.label(RichText::new(help).size(12.5).color(TEXT_DIM));
+        if before != self.cfg.stream_quality {
+            self.net.send(Cmd::SetQuality(self.cfg.stream_quality.api().to_string()));
+            self.touch();
+        }
+        ui.add_space(6.0);
+        let mut v = self.cfg.normalize;
+        if toggle_row(ui, &mut v, "Normalize volume",
+            "Songs play at about the same loudness (from TIDAL's loudness data), so a quiet one does not have to be turned up and the next loud one does not startle.") {
+            self.cfg.normalize = v;
+            self.audio.send(AudioCmd::SetNormalize(v));
+            self.touch();
+        }
     }
 
     fn transition_settings(&mut self, ui: &mut egui::Ui) {
@@ -5140,6 +5292,37 @@ impl eframe::App for App {
 }
 
 // ------------------------------------------------------------- free helpers
+
+/// A size on disk, measured every few seconds on a thread of its own: walking a cache with
+/// thousands of files must not stall the frame.
+#[derive(Default)]
+struct Measured {
+    value: Arc<std::sync::atomic::AtomicU64>,
+    busy: Arc<std::sync::atomic::AtomicBool>,
+    at: Option<Instant>,
+}
+
+impl Measured {
+    /// The last result (0 until there is one); starts a new measurement when it is due.
+    fn get(&mut self, measure: impl FnOnce() -> u64 + Send + 'static) -> u64 {
+        use std::sync::atomic::Ordering;
+        let due = self.at.is_none_or(|at| at.elapsed() > Duration::from_secs(3));
+        if due && !self.busy.swap(true, Ordering::SeqCst) {
+            self.at = Some(Instant::now());
+            let (value, busy) = (self.value.clone(), self.busy.clone());
+            std::thread::spawn(move || {
+                value.store(measure(), Ordering::Relaxed);
+                busy.store(false, Ordering::SeqCst);
+            });
+        }
+        self.value.load(Ordering::Relaxed)
+    }
+
+    /// Measure again at the next look (after the cache was cleared).
+    fn reset(&mut self) {
+        self.at = None;
+    }
+}
 
 const PLAYER_HEIGHT: f32 = 88.0;
 /// Height of the search capsule and the round header buttons.

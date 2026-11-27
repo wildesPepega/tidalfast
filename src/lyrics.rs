@@ -244,7 +244,8 @@ impl View {
             None => -focus_y + 40.0,
         };
         // the wheel scrolls by hand for a moment
-        let over = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
+        let layer = ui.layer_id();
+        let over = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p) && ctx.layer_id_at(p).is_none_or(|l| l == layer));
         let wheel = if over { ctx.input(|i| i.smooth_scroll_delta.y) } else { 0.0 };
         if wheel != 0.0 {
             self.scroll -= wheel;
@@ -267,7 +268,7 @@ impl View {
         self.scroll = self.scroll.clamp(-rect.height() * 0.6, content_end + rect.height() * 0.2);
 
         let font = FontId::proportional(FONT_SIZE);
-        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        let pointer = ctx.input(|i| i.pointer.hover_pos()).filter(|&p| ctx.layer_id_at(p).is_none_or(|l| l == layer));
         let mut seek = None;
         let view_mid = rect.height() * 0.5;
 
@@ -323,13 +324,18 @@ impl View {
             // last words of a line are not greyed out before they are sung
             let is_active = sung_now == Some(i);
             let line_rect = Rect::from_min_size(Pos2::new(inner.left(), y0), egui::vec2(inner.width(), lay.height));
-            let hovered = pointer.is_some_and(|p| line_rect.expand2(egui::vec2(8.0, LINE_GAP * 0.5)).contains(p));
-            let resp = ui.interact(line_rect.expand2(egui::vec2(8.0, LINE_GAP * 0.5)), egui::Id::new(("lyric", i)), egui::Sense::click());
-            if resp.hovered() {
-                ui::pointer_on_hover(&resp);
-            }
-            if resp.clicked() {
-                seek = Some(line.start);
+            // only the part inside the column takes clicks: a line that scrolls past the top edge
+            // must not cover the tabs (Lyrics / Credits) above it
+            let hit = line_rect.expand2(egui::vec2(8.0, LINE_GAP * 0.5)).intersect(rect);
+            let hovered = hit.is_positive() && pointer.is_some_and(|p| hit.contains(p));
+            if hit.is_positive() {
+                let resp = ui.interact(hit, egui::Id::new(("lyric", i)), egui::Sense::click());
+                if resp.hovered() {
+                    ui::pointer_on_hover(&resp);
+                }
+                if resp.clicked() {
+                    seek = Some(line.start);
+                }
             }
             let base = (0.20 + 0.34 * falloff + if hovered { 0.16 } else { 0.0 }).clamp(0.0, 1.0) * edge;
 

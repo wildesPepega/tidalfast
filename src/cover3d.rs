@@ -288,7 +288,9 @@ impl Cover3d {
         let from = from.unwrap_or(to);
 
         // the mouse: tilt towards it, light follows it
-        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        // only when nothing (settings, a menu, a dialog) lies on top of the cover there
+        let layer = ui.layer_id();
+        let pointer = ctx.input(|i| i.pointer.hover_pos()).filter(|&p| ctx.layer_id_at(p).is_none_or(|l| l == layer));
         #[cfg(debug_assertions)]
         let pointer = self.debug_pointer.map(|f| rect.min + rect.size() * f).or(pointer);
         let (target, over) = match pointer {

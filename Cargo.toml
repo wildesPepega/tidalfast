@@ -1,6 +1,6 @@
 [package]
 name = "oxytide"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "A simple, native TIDAL client built with egui"
 license = "GPL-3.0-only"

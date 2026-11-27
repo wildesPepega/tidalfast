@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::plugins::manifest::{Permission, Risk};
-use crate::plugins::registry::{self, Button, Entry, Kind, MenuItem, Place};
+use crate::plugins::registry::{self, Button, Category, Entry, Kind, MenuItem, Place};
 use crate::plugins::runtime::{FromPlugin, PlayerCmd, ToPlugin};
 use crate::plugins::{self, Status, Why};
 use crate::theme_file::{self, CustomTheme};
@@ -22,8 +22,8 @@ pub struct PluginUi {
     pub theme_problems: Vec<(String, String)>,
     /// The plugin whose “may it?” question is open.
     pub consent: Option<String>,
-    /// The plugin settings page that is open (plugin id, page id).
-    pub page: Option<(String, String)>,
+    /// The plugin whose settings window (the gear on its card) is open.
+    pub settings: Option<String>,
     /// The menu entries of the song menu, refreshed every frame.
     pub menu: Vec<(String, MenuItem)>,
     /// Plugins were switched on or off, or changed: start and stop accordingly.
@@ -45,7 +45,7 @@ impl PluginUi {
             themes,
             theme_problems,
             consent: None,
-            page: None,
+            settings: None,
             menu: Vec::new(),
             dirty: true,
             off: std::env::args().any(|a| a == "--no-plugins"),
@@ -372,9 +372,11 @@ impl App {
             Some(r) => (r.alive, r.stopped.clone(), r.log.iter().cloned().collect()),
             None => (false, None, Vec::new()),
         };
-        let mut turn_on = false;
-        let mut turn_off = false;
+        let has_settings = alive && self.pl.manager.has_settings(&id);
+        let mut switched: Option<bool> = None;
+        let mut review = false;
         let mut restart = false;
+        let mut open_settings = false;
         ui::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -383,6 +385,39 @@ impl App {
                 if !p.manifest.author.is_empty() {
                     ui.label(RichText::new(format!("by {}", p.manifest.author)).size(12.0).color(TEXT_DIM));
                 }
+                if p.builtin {
+                    ui.label(RichText::new("built in").size(11.5).color(TEXT_DIM)).on_hover_text("Comes with Oxytide. A folder of the same name in the plugins folder replaces it.");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut on = status != Status::Off;
+                    let tip = if on { "Turn off" } else { "Turn on" };
+                    if ui::switch(ui, egui::Id::new(("plugin_switch", &id)), &mut on).on_hover_text(tip).changed() {
+                        switched = Some(on);
+                    }
+                    ui.add_space(4.0);
+                    let gear = ui.add_enabled_ui(has_settings, |ui| {
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+                        if has_settings {
+                            pointer_on_hover(&resp);
+                        }
+                        if resp.hovered() {
+                            ui.painter().circle_filled(rect.center(), 15.0, CARD_HOVER);
+                        }
+                        let ink = if !has_settings { ui::with_alpha(TEXT_DIM, 90) } else if resp.hovered() { ui::TEXT } else { TEXT_DIM };
+                        ui::paint_icon(ui.painter(), rect.center(), icons::GEAR_SIX, 18.0, ink, egui::FontFamily::Proportional);
+                        resp
+                    });
+                    let tip = if has_settings {
+                        "Settings"
+                    } else if alive {
+                        "This plugin has no settings"
+                    } else {
+                        "Its settings are here while it runs"
+                    };
+                    if gear.inner.on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
+                        open_settings = true;
+                    }
+                });
             });
             if !p.manifest.description.is_empty() {
                 ui.label(RichText::new(&p.manifest.description).size(12.5).color(ui::lerp_color(ui::TEXT, TEXT_DIM, 0.35)));
@@ -397,23 +432,22 @@ impl App {
                     ui.label(RichText::new(perm.id()).size(12.0).color(risk_color(perm.risk())).monospace()).on_hover_text(perm.description());
                 }
             });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                match status {
-                    Status::Off => {
-                        ui.label(RichText::new("Off").color(TEXT_DIM));
-                        turn_on = ui::glass_button(ui, "", "Turn on…").clicked();
-                    }
-                    Status::NeedsConsent(why) => {
+            match status {
+                Status::Off => {}
+                Status::NeedsConsent(why) => {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
                         let text = match why {
                             Why::Changed => "Changed since you allowed it: needs your approval again",
                             Why::MorePermissions => "Asks for more than you allowed: needs your approval",
                         };
                         ui.label(RichText::new(text).color(ui::WARN));
-                        turn_on = ui::glass_button(ui, "", "Review…").clicked();
-                        turn_off = ui::glass_button(ui, "", "Turn off").clicked();
-                    }
-                    Status::Allowed => {
+                        review = ui::glass_button(ui, "", "Review…").clicked();
+                    });
+                }
+                Status::Allowed => {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
                         if !self.plugins_on() {
                             ui.label(RichText::new("Allowed, but plugins are switched off").color(TEXT_DIM));
                         } else if let Some(why) = &stopped {
@@ -424,10 +458,9 @@ impl App {
                         } else {
                             ui.label(RichText::new("Starting…").color(TEXT_DIM));
                         }
-                        turn_off = ui::glass_button(ui, "", "Turn off").clicked();
-                    }
+                    });
                 }
-            });
+            }
             if !log.is_empty() {
                 egui::CollapsingHeader::new(RichText::new(format!("Messages ({})", log.len())).size(12.0).color(TEXT_DIM)).id_salt(("plugin_log", &id)).show(ui, |ui| {
                     for (error, line) in log.iter().rev().take(12) {
@@ -436,20 +469,51 @@ impl App {
                 });
             }
         });
-        if turn_on {
-            self.pl.consent = Some(id.clone());
-        }
-        if turn_off {
-            if let Some(c) = self.cfg.plugin_cfg.get_mut(&id) {
-                c.enabled = false;
+        match switched {
+            Some(true) => {
+                // what was allowed before (and has not changed) goes on at once; anything else is asked first
+                let mut again = self.cfg.plugin_cfg.get(&id).cloned().unwrap_or_default();
+                again.enabled = true;
+                if plugins::status(p, Some(&again), self.cfg.plugin_dev_mode) == Status::Allowed {
+                    self.cfg.plugin_cfg.insert(id.clone(), again);
+                    self.plugin_switched_on(&id);
+                } else {
+                    self.pl.consent = Some(id.clone());
+                }
             }
-            self.pl.dirty = true;
-            self.touch();
+            Some(false) => {
+                if let Some(c) = self.cfg.plugin_cfg.get_mut(&id) {
+                    c.enabled = false;
+                }
+                if self.pl.settings.as_deref() == Some(id.as_str()) {
+                    self.pl.settings = None;
+                }
+                self.pl.dirty = true;
+                self.touch();
+            }
+            None => {}
+        }
+        if review {
+            self.pl.consent = Some(id.clone());
         }
         if restart {
             self.pl.manager.restart(&id);
             self.pl.dirty = true;
         }
+        if open_settings {
+            self.pl.settings = Some(id);
+        }
+    }
+
+    /// A plugin was allowed and switched on: start it (and plugins at all, if they were off).
+    fn plugin_switched_on(&mut self, id: &str) {
+        if !self.cfg.plugins_enabled {
+            self.cfg.plugins_enabled = true;
+            self.toast("Plugins are switched on again".to_string());
+        }
+        self.pl.manager.restart(id);
+        self.pl.dirty = true;
+        self.touch();
     }
 
     /// “May this plugin do this?” — what it asks for, in plain words, before anything runs.
@@ -509,28 +573,71 @@ impl App {
         });
         if allow {
             self.cfg.plugin_cfg.insert(id.clone(), plugins::consent(&p));
-            self.pl.manager.restart(&id);
-            self.pl.dirty = true;
             self.pl.consent = None;
-            self.touch();
+            self.plugin_switched_on(&id);
         } else if cancel || modal.should_close() {
             self.pl.consent = None;
         }
     }
 
-    /// A settings page that a plugin made.
-    pub(super) fn plugin_page(&mut self, ui: &mut egui::Ui) {
-        let Some((plugin, cat)) = self.pl.page.clone() else { return };
-        let found = self.pl.manager.categories().into_iter().find(|(p, c)| *p == plugin && c.id == cat).map(|(_, c)| c.clone());
-        let Some(category) = found else {
-            ui.label(RichText::new("This page is gone (the plugin has stopped).").color(TEXT_DIM));
+    /// The settings of one plugin (the gear on its card), in a window over the settings.
+    pub(super) fn plugin_settings_dialog(&mut self, ctx: &egui::Context) {
+        let Some(plugin) = self.pl.settings.clone() else { return };
+        if !self.settings_open {
+            self.pl.settings = None;
             return;
-        };
-        ui.heading(&category.title);
-        ui.label(RichText::new(format!("from the plugin “{}”", self.plugin_name(&plugin))).size(12.0).color(TEXT_DIM));
-        ui.add_space(6.0);
-        for entry in &category.entries {
-            self.plugin_entry(ui, &plugin, entry);
+        }
+        let categories: Vec<Category> = self.pl.manager.categories().into_iter().filter(|(p, _)| *p == plugin).map(|(_, c)| c.clone()).collect();
+        let extra: Vec<(String, Entry)> = self.pl.manager.extra_for(&plugin);
+        let name = self.plugin_name(&plugin);
+        let frame = ui::card().fill(ui::panel_solid()).inner_margin(egui::Margin::same(22));
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::new(("plugin_settings", &plugin))).frame(frame).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(icons::GEAR_SIX).size(18.0).color(accent()));
+                ui.label(RichText::new(&name).strong().size(18.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let spot = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover()).0;
+                    let resp = ui::round_icon_button(ui, egui::Id::new("plugin_settings_close"), spot, icons::X);
+                    if resp.on_hover_text("Close (Esc)").clicked() {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            let max_h = (ctx.screen_rect().height() * 0.7).max(200.0);
+            egui::ScrollArea::vertical().id_salt(("plugin_settings_scroll", &plugin)).max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                if categories.is_empty() && extra.is_empty() {
+                    let text = if self.pl.manager.running.get(&plugin).is_some_and(|r| r.alive) {
+                        "This plugin has no settings."
+                    } else {
+                        "The plugin is not running (any more), so its settings are not available."
+                    };
+                    ui.label(RichText::new(text).color(TEXT_DIM));
+                }
+                let titled = categories.len() + usize::from(!extra.is_empty()) > 1;
+                for category in &categories {
+                    if titled {
+                        settings_group(ui, &category.title);
+                    }
+                    for entry in &category.entries {
+                        self.plugin_entry(ui, &plugin, entry);
+                    }
+                }
+                if !extra.is_empty() {
+                    if titled || !categories.is_empty() {
+                        settings_group(ui, "On other settings pages");
+                    }
+                    for (_, entry) in &extra {
+                        self.plugin_entry(ui, &plugin, entry);
+                    }
+                }
+            });
+        });
+        if close || modal.should_close() {
+            self.pl.settings = None;
         }
     }
 

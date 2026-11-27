@@ -46,6 +46,28 @@ pub struct Plugin {
     pub script: String,
     /// SHA-256 of `plugin.toml` and the script.
     pub hash: String,
+    /// Comes with oxytide (not from the plugins folder).
+    pub builtin: bool,
+}
+
+/// The plugins that come with oxytide (`examples/plugins`), so there is something to switch on
+/// without copying folders around. A folder of the same name in the plugins folder wins.
+const BUNDLED: &[(&str, &str)] = &[
+    (include_str!("../../examples/plugins/focus/plugin.toml"), include_str!("../../examples/plugins/focus/main.rhai")),
+    (include_str!("../../examples/plugins/hello/plugin.toml"), include_str!("../../examples/plugins/hello/main.rhai")),
+    (include_str!("../../examples/plugins/now-playing-card/plugin.toml"), include_str!("../../examples/plugins/now-playing-card/main.rhai")),
+];
+
+/// The plugins that come with oxytide.
+pub fn bundled(root: &Path) -> Vec<Plugin> {
+    BUNDLED
+        .iter()
+        .filter_map(|(manifest_text, script)| {
+            let manifest = manifest::parse(manifest_text).ok()?;
+            let dir = root.join(&manifest.id);
+            Some(Plugin { hash: hash_of(manifest_text, script), manifest, dir, script: script.to_string(), builtin: true })
+        })
+        .collect()
 }
 
 pub fn plugins_dir() -> PathBuf {
@@ -82,7 +104,7 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     }
     let script = std::fs::read_to_string(&path).map_err(|e| format!("main.rhai: {e}"))?;
     let hash = hash_of(&manifest_text, &script);
-    Ok(Plugin { manifest, dir: dir.to_path_buf(), script, hash })
+    Ok(Plugin { manifest, dir: dir.to_path_buf(), script, hash, builtin: false })
 }
 
 /// All plugins in a folder, and what is wrong with the ones that cannot be loaded.
@@ -159,6 +181,9 @@ pub struct Running {
     /// The last lines it printed or failed with (`true` = an error).
     pub log: VecDeque<(bool, String)>,
     pub stopped: Option<String>,
+    /// What this run of the plugin says. Each run has its own channel, so the last words of a run
+    /// that was switched off cannot reach the next one (and mark it as stopped).
+    rx: Receiver<(String, FromPlugin)>,
 }
 
 pub struct Manager {
@@ -166,8 +191,6 @@ pub struct Manager {
     pub problems: Vec<(String, String)>,
     pub running: BTreeMap<String, Running>,
     pub shared: Arc<Mutex<Shared>>,
-    out_tx: Sender<(String, FromPlugin)>,
-    out_rx: Receiver<(String, FromPlugin)>,
     wake: Arc<dyn Fn() + Send + Sync>,
     root: PathBuf,
     data: PathBuf,
@@ -181,14 +204,11 @@ impl Manager {
     }
 
     pub fn with_dirs(wake: Arc<dyn Fn() + Send + Sync>, root: PathBuf, data: PathBuf) -> Self {
-        let (out_tx, out_rx) = channel();
         let mut m = Self {
             plugins: Vec::new(),
             problems: Vec::new(),
             running: BTreeMap::new(),
             shared: Arc::new(Mutex::new(Shared::default())),
-            out_tx,
-            out_rx,
             wake,
             root,
             data,
@@ -203,7 +223,13 @@ impl Manager {
 
     /// Look at the folder again.
     pub fn rescan(&mut self) {
-        let (plugins, problems) = discover(&self.root);
+        let (mut plugins, problems) = discover(&self.root);
+        for b in bundled(&self.root) {
+            if !plugins.iter().any(|p| p.manifest.id == b.manifest.id) {
+                plugins.push(b);
+            }
+        }
+        plugins.sort_by(|a, b| a.manifest.name.to_lowercase().cmp(&b.manifest.name.to_lowercase()));
         self.plugins = plugins;
         self.problems = problems;
     }
@@ -229,19 +255,20 @@ impl Manager {
             if self.running.contains_key(&id) {
                 continue;
             }
+            let (out, rx) = channel();
             let host = runtime::Host {
                 id: id.clone(),
                 caps: p.manifest.permissions.iter().copied().collect(),
                 hosts: p.manifest.hosts.clone(),
                 data_dir: self.data.clone(),
                 shared: self.shared.clone(),
-                out: self.out_tx.clone(),
+                out,
                 wake: self.wake.clone(),
             };
             let tx = runtime::spawn(host, p.script.clone());
             self.running.insert(
                 id,
-                Running { tx, hash: p.hash.clone(), alive: true, ready: false, registry: Registry::default(), hooks: Vec::new(), log: VecDeque::new(), stopped: None },
+                Running { tx, hash: p.hash.clone(), alive: true, ready: false, registry: Registry::default(), hooks: Vec::new(), log: VecDeque::new(), stopped: None, rx },
             );
         }
     }
@@ -267,7 +294,8 @@ impl Manager {
     /// Take in what the plugins have said; what is returned is for the app to act on.
     pub fn poll(&mut self) -> Vec<(String, FromPlugin)> {
         let mut todo = Vec::new();
-        while let Ok((id, msg)) = self.out_rx.try_recv() {
+        let incoming: Vec<(String, FromPlugin)> = self.running.iter().flat_map(|(id, r)| r.rx.try_iter().map(move |(_, m)| (id.clone(), m))).collect();
+        for (id, msg) in incoming {
             let Some(r) = self.running.get_mut(&id) else { continue };
             let line = |r: &mut Running, error: bool, text: String| {
                 r.log.push_back((error, text));
@@ -329,6 +357,16 @@ impl Manager {
             .filter(|(_, r)| r.alive)
             .flat_map(|(id, r)| r.registry.extra.iter().filter(move |(p, _)| p == page).map(move |(_, e)| (id.as_str(), e)))
             .collect()
+    }
+
+    /// The entries one plugin added to built-in settings pages (page, entry).
+    pub fn extra_for(&self, id: &str) -> Vec<(String, Entry)> {
+        self.running.get(id).filter(|r| r.alive).map(|r| r.registry.extra.clone()).unwrap_or_default()
+    }
+
+    /// Has this running plugin made any settings?
+    pub fn has_settings(&self, id: &str) -> bool {
+        self.running.get(id).is_some_and(|r| r.alive && (!r.registry.categories.is_empty() || !r.registry.extra.is_empty()))
     }
 
     pub fn hidden(&self, feature: &str) -> bool {
@@ -405,6 +443,53 @@ mod tests {
         let greedy = load(&root.join("p")).unwrap();
         assert_eq!(status(&greedy, Some(&cfg), true), Status::NeedsConsent(Why::MorePermissions));
         assert_eq!(status(&greedy, Some(&consent(&greedy)), false), Status::Allowed);
+    }
+
+    #[test]
+    fn the_bundled_plugins_are_offered_and_a_folder_of_the_same_name_wins() {
+        let root = temp();
+        let m = Manager::with_dirs(Arc::new(|| {}), root.clone(), temp());
+        for id in ["focus", "hello", "now-playing-card"] {
+            assert!(m.plugins.iter().any(|p| p.manifest.id == id && p.builtin), "{id} is offered");
+        }
+        write(&root, "focus", "\"ui.modify\"", "let mine = 1;");
+        let m = Manager::with_dirs(Arc::new(|| {}), root, temp());
+        let focus: Vec<_> = m.plugins.iter().filter(|p| p.manifest.id == "focus").collect();
+        assert_eq!(focus.len(), 1);
+        assert!(!focus[0].builtin && focus[0].script.contains("mine"));
+    }
+
+    /// Switched off and on again, a plugin must run again (the last words of the old run, such
+    /// as "stopped", must not reach the new one).
+    #[test]
+    fn a_plugin_switched_off_and_on_again_runs() {
+        let root = temp();
+        write(&root, "p", "\"ui.buttons\"", "ui::button(#{ id: \"b\", label: \"B\", place: \"header\" });");
+        let mut m = Manager::with_dirs(Arc::new(|| {}), root, temp());
+        let p = m.plugins.iter().find(|p| p.manifest.id == "p").unwrap().clone();
+        let mut cfg = BTreeMap::new();
+        cfg.insert("p".to_string(), consent(&p));
+        let wait_ready = |m: &mut Manager| {
+            let end = std::time::Instant::now() + Duration::from_secs(5);
+            while !m.running.get("p").is_some_and(|r| r.ready) && std::time::Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(30));
+                m.poll();
+            }
+        };
+        m.sync(&cfg, true, false);
+        wait_ready(&mut m);
+        cfg.get_mut("p").unwrap().enabled = false;
+        m.sync(&cfg, true, false);
+        // the old run winds down meanwhile (the app does not poll while nothing runs)
+        std::thread::sleep(Duration::from_millis(300));
+        cfg.get_mut("p").unwrap().enabled = true;
+        m.sync(&cfg, true, false);
+        wait_ready(&mut m);
+        std::thread::sleep(Duration::from_millis(200));
+        m.poll();
+        let r = m.running.get("p").expect("running again");
+        assert!(r.alive && r.ready && r.stopped.is_none());
+        assert_eq!(m.buttons(Place::Header).len(), 1);
     }
 
     #[test]

@@ -88,7 +88,7 @@ Plugins are written in [Rhai](https://rhai.rs), a small scripting language that 
 | Windows | `%APPDATA%\oxytide\plugins\`                       |
 | macOS   | `~/Library/Application Support/oxytide/plugins/`   |
 
-The folder's name must be the plugin's `id`. In *Settings → Plugins* use *Open plugins folder*, then *Reload*. A plugin **never runs until the user has seen what it asks for and allowed it** (see [Security](#security)).
+The folder's name must be the plugin's `id`. In *Settings → Plugins* use *Open plugins folder*, then *Reload*. The examples in `examples/plugins` (Focus mode, Hello, Copy now playing) come with Oxytide and are listed there already; a folder with the same id replaces the built-in one. A plugin **never runs until the user has seen what it asks for and allowed it** (see [Security](#security)).
 
 ### A first plugin
 
@@ -257,7 +257,7 @@ The first argument is the page: either one you created with `settings::category`
 
 | Function | Needs | Description |
 |----------|-------|-------------|
-| `settings::category(id, title, icon)` | `ui.settings` | Create a page (up to 6). Shown in the settings menu. |
+| `settings::category(id, title, icon)` | `ui.settings` | Create a page (up to 6). Shown in the plugin's settings window (the gear next to its switch under Settings → Plugins); with several pages, each gets a heading. |
 | `settings::heading(page, text)` | `ui.settings` | A heading. |
 | `settings::label(page, id, text)` | `ui.settings` | A line of text. |
 | `settings::toggle(...)`, `text(...)`, `number(...)`, `choice(...)` | `ui.settings` | Input entries (see above). Up to 80 entries per plugin; ids must be unique. |
@@ -429,7 +429,7 @@ Plugins are code from other people, so Oxytide treats them as untrusted.
 - Talk to the internet, unless it has the `network` permission, and then only to the HTTPS servers you saw in the approval dialog. It cannot reach this computer (`localhost`) or your home network, and it cannot follow a redirect to another server.
 - Load or run native code (no DLLs, no `.so` files). A plugin is text.
 - Freeze the app: each plugin runs in its own thread with limits on work and time.
-- Pose as the app: its notifications are prefixed with its name, and its settings pages are labelled "from the plugin …".
+- Pose as the app: its notifications are prefixed with its name, and its settings open in a window titled with its name, from its own card under Settings → Plugins.
 
 ### How you stay in control
 

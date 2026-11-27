@@ -102,8 +102,6 @@ enum SettingsTab {
     System,
     Account,
     Plugins,
-    /// A settings page that a plugin made.
-    PluginPage,
 }
 
 const LIKED_UUID: &str = "liked";
@@ -4027,24 +4025,6 @@ impl App {
                                             self.settings_tab = tab;
                                         }
                                     }
-                                    // the pages plugins have made
-                                    let pages: Vec<(String, String, String, String)> = if self.plugins_on() {
-                                        self.pl
-                                            .manager
-                                            .categories()
-                                            .into_iter()
-                                            .map(|(p, c)| (p.to_string(), c.id.clone(), c.title.clone(), c.icon.clone()))
-                                            .collect()
-                                    } else {
-                                        Vec::new()
-                                    };
-                                    for (plugin, cat, title, icon) in pages {
-                                        let selected = self.settings_tab == SettingsTab::PluginPage && self.pl.page == Some((plugin.clone(), cat.clone()));
-                                        if nav_item(ui, plugins::registry::icon(&icon), &title, selected, None).clicked() {
-                                            self.settings_tab = SettingsTab::PluginPage;
-                                            self.pl.page = Some((plugin, cat));
-                                        }
-                                    }
                                 });
                         },
                     );
@@ -4084,7 +4064,6 @@ impl App {
     fn settings_content(&mut self, ui: &mut egui::Ui) {
         match self.settings_tab {
             SettingsTab::Plugins => return self.plugins_settings(ui),
-            SettingsTab::PluginPage => return self.plugin_page(ui),
             _ => {}
         }
         self.settings_content_inner(ui);
@@ -4096,14 +4075,14 @@ impl App {
             SettingsTab::Overlay => "overlay",
             SettingsTab::System => "system",
             SettingsTab::Account => "account",
-            SettingsTab::Plugins | SettingsTab::PluginPage => return,
+            SettingsTab::Plugins => return,
         };
         self.plugin_extra_entries(ui, page);
     }
 
     fn settings_content_inner(&mut self, ui: &mut egui::Ui) {
         match self.settings_tab {
-            SettingsTab::Plugins | SettingsTab::PluginPage => {}
+            SettingsTab::Plugins => {}
             SettingsTab::Playback => {
                 ui.heading("Playback");
                 ui.add_space(8.0);
@@ -5275,6 +5254,7 @@ impl eframe::App for App {
         self.dialog_ui(ctx);
         self.profile_menu(ctx);
         self.settings_modal(ctx);
+        self.plugin_settings_dialog(ctx);
         self.status_toast(ctx);
         self.maybe_save();
 
@@ -6495,8 +6475,8 @@ mod debug_shot {
                     Ok("appearance") => super::SettingsTab::Appearance,
                     Ok("plugins") => super::SettingsTab::Plugins,
                     Ok("page") => {
-                        self.pl.page = Some(("hello".to_string(), "hello".to_string()));
-                        super::SettingsTab::PluginPage
+                        self.pl.settings = Some("hello".to_string());
+                        super::SettingsTab::Plugins
                     }
                     Ok("discord") => super::SettingsTab::Discord,
                     Ok("overlay") => super::SettingsTab::Overlay,
@@ -6564,7 +6544,7 @@ mod debug_shot {
                     self.toast = Some((text, Instant::now()));
                 }
             }
-            if std::env::var_os("OXYTIDE_SHOT_PLUGINS").is_some() && !self.pl.manager.plugins.is_empty() && self.cfg.plugin_cfg.is_empty() {
+            if std::env::var_os("OXYTIDE_SHOT_PLUGINS").is_some() && !self.pl.manager.plugins.is_empty() && !self.cfg.plugin_cfg.values().any(|c| c.enabled) {
                 // screenshots: allow every plugin that is in the folder
                 for p in self.pl.manager.plugins.clone() {
                     self.cfg.plugin_cfg.insert(p.manifest.id.clone(), crate::plugins::consent(&p));

@@ -963,6 +963,29 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
     resp
 }
 
+/// An on/off switch (a pill with a knob that slides over); `changed()` when it was flipped.
+pub fn switch(ui: &mut Ui, id: egui::Id, value: &mut bool) -> Response {
+    let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(42.0, 24.0), Sense::click());
+    pointer_on_hover(&resp);
+    if resp.clicked() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    let t = ui.ctx().animate_bool_with_time(id, *value, 0.12);
+    let hovered = resp.hovered();
+    let off = lerp_color(panel_solid(), Color32::WHITE, if hovered { 0.16 } else { 0.10 });
+    let on = lerp_color(accent(), Color32::WHITE, if hovered { 0.15 } else { 0.0 });
+    let p = ui.painter();
+    let radius = CornerRadius::same(12);
+    p.rect_filled(rect, radius, lerp_color(off, on, t));
+    if t < 1.0 {
+        p.rect_stroke(rect, radius, Stroke::new(1.0_f32, with_alpha(glass_colors(hovered, false).1, ((1.0 - t) * 255.0) as u8)), egui::StrokeKind::Inside);
+    }
+    let x = egui::lerp(rect.left() + 12.0..=rect.right() - 12.0, t);
+    p.circle_filled(egui::pos2(x, rect.center().y), 8.0, lerp_color(TEXT_DIM, BG, t));
+    resp
+}
+
 /// A glass button with an icon and a label, the height of the segmented control.
 pub fn glass_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
     let text_w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(14.0), TEXT).size().x;

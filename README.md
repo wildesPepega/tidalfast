@@ -118,7 +118,7 @@ On first start Oxytide shows a code and opens TIDAL's device-login page in your 
 
 ## Plugins and themes
 
-Oxytide can be extended with **plugins** (small scripts in a sandbox that add buttons, menu entries and settings, react to the music and can even hide or change built-in parts) and **themes** (a colour file, no code). Plugins never run until you have seen what they ask for and allowed it; they cannot touch your files, start programs or see your TIDAL account. See [API.md](API.md) for the full reference (including the security model), and [`examples/`](examples/) for plugins and themes to start from. *Settings → Plugins* and *Settings → Appearance → Theme* manage them.
+Oxytide can be extended with **plugins** (small scripts in a sandbox that add buttons, menu entries and settings, react to the music and can even hide or change built-in parts) and **themes** (a colour file, no code). Plugins never run until you have seen what they ask for and allowed it; they cannot touch your files, start programs or see your TIDAL account. See [API.md](API.md) for the full reference (including the security model), and [`examples/`](examples/) for plugins and themes to start from. *Settings → Plugins* and *Settings → Appearance → Theme* manage them: every plugin has a switch, and the gear next to it opens its settings. Three example plugins come built in (Focus mode, Hello, Copy now playing).
 
 ## Credits
 

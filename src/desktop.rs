@@ -144,6 +144,162 @@ fn install_icon() {
 #[cfg(not(any(target_os = "linux", windows)))]
 pub fn set_link_handler(_enabled: bool) {}
 
+/// Windows: the icon in the taskbar, the program's name on disk and its Start menu entry.
+#[cfg(windows)]
+pub mod windows {
+    use std::ffi::c_void;
+    use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    /// The name the program gives itself.
+    const EXE_NAME: &str = "Oxytide.exe";
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn LoadImageW(instance: *mut c_void, name: *const u16, kind: u32, cx: i32, cy: i32, flags: u32) -> *mut c_void;
+        fn SendMessageW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn GetSystemMetrics(index: i32) -> i32;
+        fn GetDpiForWindow(hwnd: *mut c_void) -> u32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+    }
+
+    /// Give the window both icons from the exe's resources. winit only sets the small one (title
+    /// bar), and without the big one the taskbar and Alt+Tab show a blank program icon.
+    pub fn set_window_icons(hwnd: *mut c_void) {
+        const WM_SETICON: u32 = 0x0080;
+        const IMAGE_ICON: u32 = 1;
+        const SM_CXICON: i32 = 11;
+        const SM_CXSMICON: i32 = 49;
+        // SAFETY: plain Win32 calls with a valid window of this process; the resource id 1 is the
+        // icon that build.rs puts into the exe (`MAKEINTRESOURCE(1)`), a missing one gives null.
+        unsafe {
+            let module = GetModuleHandleW(std::ptr::null());
+            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let scaled = |metric: i32| GetSystemMetrics(metric).max(16) * dpi / 96;
+            for (which, size) in [(1usize, scaled(SM_CXICON)), (0usize, scaled(SM_CXSMICON))] {
+                let icon = LoadImageW(module, 1 as *const u16, IMAGE_ICON, size, size, 0);
+                if !icon.is_null() {
+                    SendMessageW(hwnd, WM_SETICON, which, icon as isize);
+                }
+            }
+        }
+    }
+
+    /// Before the window opens: a copy that still runs under its old name (`tidalfast….exe`)
+    /// renames itself to `Oxytide.exe` and starts again from there. True when this process
+    /// should quit because the renamed copy takes over.
+    pub fn rename_old_exe() -> bool {
+        let Some(exe) = super::current_exe() else { return false };
+        let Some(target) = new_name_for(&exe) else { return false };
+        // an Oxytide.exe of its own may already be there (from a download): this copy replaces it
+        if target.exists() && std::fs::remove_file(&target).is_err() {
+            log::warn!("{} is in use: keeping the old name", target.display());
+            return false;
+        }
+        // Windows lets a running program be renamed (not deleted) on the same drive
+        if let Err(e) = std::fs::rename(&exe, &target) {
+            log::warn!("could not rename {} to {}: {e}", exe.display(), target.display());
+            return false;
+        }
+        // the same arguments (a link, say), without the wait this start may have been given
+        let mut args = Vec::new();
+        let mut given = std::env::args().skip(1);
+        while let Some(a) = given.next() {
+            if a == "--delay-start" {
+                given.next();
+            } else {
+                args.push(a);
+            }
+        }
+        let started = std::process::Command::new(&target).args(["--delay-start", "800"]).args(&args).spawn().is_ok();
+        if !started {
+            // carry on under the new name in this process
+            log::warn!("could not restart as {}", target.display());
+        }
+        started
+    }
+
+    /// Old copies (`tidalfast….exe`) next to this program are out of date: they go.
+    pub fn remove_old_copies() {
+        let Some(exe) = super::current_exe() else { return };
+        let Some(dir) = exe.parent() else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path != exe && new_name_for(&path).is_some() && path.is_file() {
+                // (one that is running cannot be deleted: it stays, which is fine)
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
+    /// `C:\…\tidalfast-windows-x86_64.exe` → `C:\…\Oxytide.exe`; `None` for any other name.
+    fn new_name_for(exe: &Path) -> Option<PathBuf> {
+        let name = exe.file_name()?.to_str()?.to_ascii_lowercase();
+        (name.starts_with("tidalfast") && name.ends_with(".exe")).then(|| exe.with_file_name(EXE_NAME))
+    }
+
+    /// The Start menu entry, pointing at this program. Made (or corrected) in the background when
+    /// it is missing or points elsewhere; the entry of the old name goes.
+    pub fn ensure_start_menu_entry() {
+        let (Some(exe), Some(programs)) = (super::current_exe(), dirs::data_dir().map(|d| d.join("Microsoft\\Windows\\Start Menu\\Programs"))) else {
+            return;
+        };
+        let link = programs.join("Oxytide.lnk");
+        // what the entry was last made for (reading a .lnk needs COM; a note next to the settings does not)
+        let note = dirs::config_dir().map(|d| d.join("oxytide").join("start-menu-entry"));
+        let wanted = exe.to_string_lossy().into_owned();
+        let done = link.exists() && note.as_ref().is_some_and(|n| std::fs::read_to_string(n).is_ok_and(|t| t == wanted));
+        for old in ["tidalfast.lnk", "Tidalfast.lnk"] {
+            let _ = std::fs::remove_file(programs.join(old));
+        }
+        if done {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&programs);
+        // the paths reach PowerShell as environment variables, never as part of the script text
+        let script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:OXYTIDE_LINK); \
+                      $s.TargetPath = $env:OXYTIDE_EXE; $s.WorkingDirectory = $env:OXYTIDE_DIR; \
+                      $s.IconLocation = $env:OXYTIDE_EXE + ',0'; $s.Description = 'A simple, native TIDAL client'; $s.Save()";
+        let dir = exe.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let made = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .env("OXYTIDE_LINK", &link)
+            .env("OXYTIDE_EXE", &wanted)
+            .env("OXYTIDE_DIR", &dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .is_ok_and(|s| s.success());
+        if made {
+            if let Some(note) = note {
+                let _ = crate::fsx::write_private(&note, wanted.as_bytes());
+            }
+        } else {
+            log::warn!("could not create the Start menu entry");
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn only_the_old_names_are_renamed() {
+            assert_eq!(new_name_for(Path::new("C:\\x\\tidalfast-windows-x86_64.exe")), Some(PathBuf::from("C:\\x\\Oxytide.exe")));
+            assert_eq!(new_name_for(Path::new("C:\\x\\TidalFast.exe")), Some(PathBuf::from("C:\\x\\Oxytide.exe")));
+            assert_eq!(new_name_for(Path::new("C:\\x\\Oxytide.exe")), None);
+            assert_eq!(new_name_for(Path::new("C:\\x\\oxytide-windows-x86_64.exe")), None);
+        }
+    }
+}
+
 /// The now-playing plugin for GPU Screen Recorder (built from `gsr-plugin/`).
 #[cfg(target_os = "linux")]
 const GSR_PLUGIN: &[u8] = include_bytes!("../gsr-plugin/oxytide_overlay.so");

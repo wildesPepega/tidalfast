@@ -84,10 +84,15 @@ pub struct System {
 impl System {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = mpsc::channel();
+        let hwnd = window_handle(cc);
+        #[cfg(windows)]
+        if let Some(hwnd) = hwnd {
+            crate::desktop::windows::set_window_icons(hwnd);
+        }
         Self {
             notifier: Notifier { tx, ctx: cc.egui_ctx.clone() },
             rx,
-            hwnd: window_handle(cc),
+            hwnd,
             media: None,
             tray: None,
             now: None,

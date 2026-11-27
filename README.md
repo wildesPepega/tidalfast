@@ -5,7 +5,7 @@
 <p align="center">A fast, simple and native desktop client for TIDAL, written in Rust with <a href="https://github.com/emilk/egui">egui</a>.<br>
 No Electron, no web view, just a small binary.</p>
 
-> **Formerly tidalfast.** Oxytide is the new name of tidalfast (0.7.0 and later). On the first start it takes over your settings, login, plugins, themes and cache from the old folders, so you do not have to sign in again; an installed tidalfast updates itself to Oxytide.
+> **Formerly tidalfast.** Oxytide is the new name of tidalfast (0.7.0 and later). On the first start it takes over your settings, login, plugins, themes and cache from the old folders, so you do not have to sign in again. On Windows a `tidalfast….exe` renames itself to `Oxytide.exe` and adds a Start menu entry. Releases after 0.8.0 no longer contain `tidalfast-*` files: a tidalfast older than 0.7.0 has to be replaced by hand once (download Oxytide); 0.7.0 and later update themselves.
 
 > **Unofficial.** Oxytide is not affiliated with, endorsed by or connected to TIDAL. "TIDAL" and the TIDAL logo are trademarks of their respective owners. You need your own TIDAL subscription.
 

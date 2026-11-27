@@ -50,12 +50,19 @@ fn main() -> eframe::Result<()> {
     migrate::run();
     // only now: until the old process has quit, Windows keeps its file (`.old`) locked
     update::clean_up();
+    // a copy still called tidalfast….exe becomes Oxytide.exe and starts again from there
+    #[cfg(windows)]
+    if desktop::windows::rename_old_exe() {
+        return Ok(());
+    }
 
     // `oxytide --register`: add the menu entry and icon (and take over the old settings), then quit.
     // Handy after copying the program somewhere by hand.
     if std::env::args().any(|a| a == "--register") {
         desktop::set_link_handler(config::Settings::load().link_handler);
-        println!("Oxytide is registered in the application menu.");
+        #[cfg(windows)]
+        desktop::windows::ensure_start_menu_entry();
+        println!("Oxytide is registered in the application menu{}.", if cfg!(windows) { " (Start menu)" } else { "" });
         return Ok(());
     }
 
@@ -71,7 +78,14 @@ fn main() -> eframe::Result<()> {
             return Ok(());
         }
         let handler = config::Settings::load().link_handler;
-        std::thread::spawn(move || desktop::set_link_handler(handler));
+        std::thread::spawn(move || {
+            desktop::set_link_handler(handler);
+            #[cfg(windows)]
+            {
+                desktop::windows::remove_old_copies();
+                desktop::windows::ensure_start_menu_entry();
+            }
+        });
     }
 
     #[allow(unused_mut)]
